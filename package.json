@@ -1,0 +1,32 @@
+{
+  "name": "@artifact-council/relay",
+  "version": "0.1.0-devnet",
+  "private": true,
+  "type": "module",
+  "description": "Independent Artifact Council relay, cranker, and hosted gateway",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "setup": "node --env-file=.env setup.mjs",
+    "start": "node --env-file=.env run.mjs relay",
+    "crank": "node --env-file=.env run.mjs crank",
+    "gateway": "node --env-file=.env run.mjs gateway",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@solana/kit": "8.0.0",
+    "@solana/web3.js": "1.99.0",
+    "fzstd": "0.1.1",
+    "tweetnacl": "1.0.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lukitun/artifact-council-relay.git"
+  },
+  "homepage": "https://artifactcouncil.com/earn",
+  "bugs": {
+    "url": "https://github.com/lukitun/artifact-council-relay/issues"
+  }
+}

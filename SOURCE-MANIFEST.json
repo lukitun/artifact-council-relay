@@ -1,0 +1,96 @@
+{
+  "name": "Artifact Council operator source",
+  "license": "MIT",
+  "network": "devnet",
+  "version": "0.1.0-devnet",
+  "files": [
+    {
+      "file": "package.json",
+      "sha256": "728e9a38183b358b76ae1a4a94605b613c56f813bab024e451d084c0676de6de"
+    },
+    {
+      "file": "package-lock.json",
+      "sha256": "84c2d16d566b0f1d4097cf31a57593d7af9760e9cbba7e6a5f4795110d10c2c6"
+    },
+    {
+      "file": ".env.example",
+      "sha256": "9b1f7f31aa9b67a1ce1ac4aaa09efccf6d3040bc4421adc2eb24e7780a3e1e05"
+    },
+    {
+      "file": ".gitignore",
+      "sha256": "85dd67c7a7dd128118d43c65b039d79df52ef37c2c4fdccbd4c3058adbfe20a1"
+    },
+    {
+      "file": "setup.mjs",
+      "sha256": "94e44f109cbeefb77430ae7d8c9c8cee7449318f40b1b990eb111787267e19ab"
+    },
+    {
+      "file": "run.mjs",
+      "sha256": "1eb8f3dcead17a7f115a1408f993ea40825b5d674d1bf535cb00691a91cd5309"
+    },
+    {
+      "file": "README.md",
+      "sha256": "7cd7a8bc9c0a42267efdde83439b79ef6241ffd404c48696db10d14398d434d0"
+    },
+    {
+      "file": "LICENSE",
+      "sha256": "0952dcb39e5aad765040e1882496e3b0bfa3c7809b8025446e98c1a7134ac073"
+    },
+    {
+      "file": "sdk/index.mjs",
+      "sha256": "a76a9f4d380e5a82c5d2430d57a48306c3ea7a07344ad6863bac852540e752af"
+    },
+    {
+      "file": "sdk/layout.mjs",
+      "sha256": "4476fa955df4ba1d46b5e9f330fe4ae3dc54671871f7633fa00847e4dca57a13"
+    },
+    {
+      "file": "sdk/transport.mjs",
+      "sha256": "3eda3d2fbc4a12c99cdd59d80dcab102448112921bd6694c8e864aeb5260e8b5"
+    },
+    {
+      "file": "sdk/v1.mjs",
+      "sha256": "bc64d714d41f956c90e51d7b26b8e50c1fc3bcef5d4f66bb9ab3cede303f4c7d"
+    },
+    {
+      "file": "sdk/cranks.mjs",
+      "sha256": "23156f334a0e5b0090978e3926dc32990cfd014a567319c98678e66a13a1393d"
+    },
+    {
+      "file": "sdk/colony.mjs",
+      "sha256": "db861c278351b477aa18c6d459b3d67eb590662344481207408d90ae98dae200"
+    },
+    {
+      "file": "sdk/migrate.mjs",
+      "sha256": "f2d9d924f3815deae4a6cf217d8934dda97843d6762c245b6a8a0c262b340aa3"
+    },
+    {
+      "file": "sdk/livedb.mjs",
+      "sha256": "5882bdae733357594edcf19edae947ae0d41c011989ab994bc729792b8b17700"
+    },
+    {
+      "file": "sdk/identities.mjs",
+      "sha256": "d98d5e2b7441321c89c2cced7b8ab9c78c87bd6eb1ccf0da187d1ae413af470e"
+    },
+    {
+      "file": "sdk/upload-jobs.mjs",
+      "sha256": "5e804fdc36ac5ce4920169f3bd7769aaaa0e310c32f98ef6354d599fdbf54bf5"
+    },
+    {
+      "file": "scripts/relay-server.mjs",
+      "sha256": "f5c7b9afb8ab3a8b0c5db2d1d3f3cd0415de1549ab24bc692f2a319c0dca807c"
+    },
+    {
+      "file": "scripts/http-agent.mjs",
+      "sha256": "fb1a9701d7b53955aa712c068c0943a4b7ce7a11b231233b4d0ebf1842e7b132"
+    },
+    {
+      "file": "test/operator-package.test.mjs",
+      "sha256": "612f16301648501a2962ca7d7bcf51beddc024bbdd75c4702fffb546e54fe9a4"
+    },
+    {
+      "file": "test/colony-config.test.mjs",
+      "sha256": "3849f1a08e3aaff5cff5160f0c915341ac88cace14da7b79f60cace70a43c078"
+    }
+  ]
+}
