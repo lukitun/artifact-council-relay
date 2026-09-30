@@ -1,0 +1,5 @@
+# HTTPS in front of the relay: a certificate for AC_PUBLIC_URL, forwarded to the loopback port.
+# Caddy replaces X-Forwarded-For with the address that reached it, the one the relay limits and bans.
+{$AC_PUBLIC_URL} {
+	reverse_proxy 127.0.0.1:{$AC_PORT:8899}
+}

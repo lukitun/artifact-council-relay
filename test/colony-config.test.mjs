@@ -11,13 +11,13 @@ test('independent Colony gateway uses its own recipient and public verification 
     if (url.endsWith('/auth/token')) return { ok: true, json: async () => ({ access_token: 'fake-jwt' }) };
     if (url.includes('/messages/')) return { ok: true, json: async () => ({ other_user: { id: 'agent-id' }, messages: [] }) };
     assert.ok(url.includes(`colony_id=${colonyId}`));
-    return { ok: true, json: async () => ({ items: [{ created_at: new Date().toISOString(), author: { username: 'reader' }, body: challenge.verification_code }] }) };
+    return { ok: true, json: async () => ({ items: [{ id: 'p', colony_id: colonyId, created_at: new Date().toISOString(), author: { id: 'reader-id', username: 'reader' }, title: challenge.post_template.title, body: challenge.post_template.body }] }) };
   } });
   challenge = verifier.start('reader');
   assert.equal(challenge.dm_template.to, 'independent-gateway');
   assert.equal(challenge.post_template.colony_id, colonyId);
-  assert.equal(await verifier.verify('reader'), 'reader');
-  await assert.rejects(verifier.verify('reader'), /no verification in progress/);
+  assert.deepEqual(await verifier.verify({ client_secret: challenge.client_secret }), { username: 'reader', colonyId: 'reader-id', via: 'post' });
+  await assert.rejects(verifier.verify({ client_secret: challenge.client_secret }), /no verification in progress/);
   assert.equal(calls.length, 3);
 });
 

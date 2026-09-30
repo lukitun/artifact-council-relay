@@ -1,0 +1,83 @@
+# One command: `docker compose up -d` runs the relay (AC_MODE in .env: relay or gateway) and Caddy,
+# which gets a certificate for AC_PUBLIC_URL and forwards to the relay on 127.0.0.1.
+# First: `docker compose run --rm cli init`, edit .env, fund the key. Logs: `docker compose logs -f`.
+# To look around with no domain or funds: `docker compose run --rm --service-ports preview`.
+# This host already runs a web server on 80/443 (AC_PROXY=host), or this is a cranker alone
+# (AC_MODE=crank)? `docker compose up -d relay-host` instead: the relay alone on this host's
+# 127.0.0.1:AC_PORT, behind your own Caddy or nginx (README, "HTTPS in front"), with no Caddy here.
+# One project per copy: init writes COMPOSE_PROJECT_NAME into .env, so a second copy on this host
+# (a gateway) never replaces this one's containers or shares its certificate volume.
+name: ${COMPOSE_PROJECT_NAME:-ac-relay}
+services:
+  # The network namespace and ports 80/443, held by a container that never exits: the relay may
+  # restart (its start check stops it until .env is right), and Caddy, joined here beside it, keeps
+  # reaching it on 127.0.0.1 across those restarts. Never make relay or caddy a network_mode target.
+  net:
+    image: registry.k8s.io/pause:3.10
+    ports: ["80:80", "443:443", "443:443/udp"]
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+  relay:
+    build: .
+    # Rebuilt from this directory on every up and run (cached, so quick): a newer download never runs an old image.
+    pull_policy: build
+    # This directory: .env and .local/ (the operator key and state) stay here on the host.
+    volumes: [".:/work"]
+    # The relay stays on loopback and sees Caddy as 127.0.0.1: request limits and bans read the
+    # client address Caddy puts last in X-Forwarded-For.
+    network_mode: service:net
+    depends_on: [net]
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+  caddy:
+    image: caddy:2
+    network_mode: service:net
+    depends_on: [net, relay]
+    environment:
+      # Until AC_PUBLIC_URL is set, Caddy serves only localhost (the relay's own check says what to set).
+      AC_PUBLIC_URL: ${AC_PUBLIC_URL:-localhost}
+      AC_PORT: ${AC_PORT:-8899}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    restart: unless-stopped
+  # One-off commands (init, check, seat): `docker compose run --rm cli <command>`. No ports and no
+  # other service, so it never starts or binds anything.
+  cli:
+    build: .
+    pull_policy: build
+    profiles: [cli]
+    volumes: [".:/work"]
+    network_mode: bridge
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+  relay-host:
+    build: .
+    pull_policy: build
+    profiles: [host-proxy]
+    volumes: [".:/work"]
+    # The host's own loopback: your proxy on this host is the relay's only trusted peer.
+    network_mode: host
+    environment:
+      # Hints name `docker compose up -d relay-host`, not the Caddy setup.
+      AC_PROXY: host
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+  preview:
+    build: .
+    pull_policy: build
+    profiles: [preview]
+    volumes: [".:/work"]
+    command: ["preview", "--host", "0.0.0.0"]
+    ports: ["127.0.0.1:${AC_PORT:-8899}:${AC_PORT:-8899}"]
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+volumes:
+  caddy-data:

@@ -9,10 +9,15 @@
     "node": ">=22"
   },
   "scripts": {
-    "setup": "node --env-file=.env setup.mjs",
-    "start": "node --env-file=.env run.mjs relay",
-    "crank": "node --env-file=.env run.mjs crank",
-    "gateway": "node --env-file=.env run.mjs gateway",
+    "init": "node ac-relay.mjs init",
+    "check": "node ac-relay.mjs check",
+    "preview": "node ac-relay.mjs preview",
+    "start": "node ac-relay.mjs start relay",
+    "gateway": "node ac-relay.mjs start gateway",
+    "crank": "node ac-relay.mjs start crank",
+    "seat": "node ac-relay.mjs seat",
+    "balance": "node ac-relay.mjs balance",
+    "withdraw": "node ac-relay.mjs withdraw",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {

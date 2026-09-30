@@ -1,0 +1,4 @@
+# Ineligible custody owners, one base58 wallet address per line; optional # source comment.
+# Compiled into the on-chain program: changing this file requires rebuilding and deployment.
+# Add verified exchange custody addresses before launch. No exchange inventory supplied yet.
+# Bonding-curve PDAs and program-owned pools are rejected structurally, independently of this list.

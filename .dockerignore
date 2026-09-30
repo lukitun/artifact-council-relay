@@ -1,0 +1,12 @@
+# An allowlist: the image gets the code and nothing else, never .env, its backups, keys or state
+# (a key copied into this directory stays out of every layer). The Dockerfile copies these by name too.
+*
+!package.json
+!package-lock.json
+!ac-relay.mjs
+!check.mjs
+!docker-entrypoint.sh
+!.env.example
+!holder-exclusions.txt
+!sdk/*.mjs
+!scripts/*.mjs

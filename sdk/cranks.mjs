@@ -1,29 +1,131 @@
 // One pass over every time-based step the protocol has. Anyone can run it; none of it needs a
 // server of ours. Each step is idempotent and skipped when there is nothing to do.
-import { TAG } from './layout.mjs';
+import { TAG, times, counted, kickDeadline, decodeEpoch, decodeUpload } from './layout.mjs';
+import { expireSnapshot, pruneSeat, prunable, closeCandidate, distributeSnapshot } from './snapshots.mjs';
 
 const clears = (a, r, of, ab, rb) => of > 0 && a * 10000 > of * ab && r * 10000 < of * rb;
+const NONE = '11111111111111111111111111111111';
+/** A claim transaction's one signature: a share worth no more than this is never claimed (payout.mjs reports it so). */
+export const CLAIM_FEE = 5000;
+/** A claim earns no refund: each relay claims only its own share of `e`, and only one worth more than its fee. */
+const claimable = (e, w) => w.epoch === e.workKey && w.units > 0 && !w.claimed && Math.floor(e.relayerPool * w.units / Math.max(1, e.work)) > CLAIM_FEE;
 
-export async function crankOnce(c, payer, { log = () => {} } = {}) {
-  const now = Math.floor(await c.t.now()); const done = [];
-  const step = async (name, f) => { try { await f(); done.push(name); log(name); } catch (e) { log(`${name}: ${e.message.split('\n')[0]}`); } };
+/**
+ * Whether the program would resolve `p` now (governance.rs `resolve`): its window closed, it clears
+ * early on its counted roster (roster ∩ members, owner 29 September D4), or it is void: made before
+ * the artifact's last claim, no counted seat left, or its charged agent, applicant or seconded
+ * author banned. `banned` is the set of banned ids.
+ */
+export function resolvable(p, art, now, banned) {
+  // The roster never lists the proposer (nor a kick's or ban's target).
+  const { approve, reject, seats } = counted(p, art), k = p.payload.kind;
+  const voided = p.created < art.claimed || seats === 0 || (p.charged !== NONE && banned.has(p.charged))
+    || (k === 'membership' && banned.has(p.payload.agent)) || (k === 'content' && p.seconded && banned.has(p.proposer));
+  return { voided, due: now >= p.closes, early: !voided && clears(approve, reject, seats, p.approveBps, p.rejectBps) };
+}
+
+/**
+ * The pass, in order (cleanup-spec §3 WP-B2, snapshot-spec §6.3, owner 29 September):
+ * 1. prune every seat of every banned agent, so resolves see pruned members;
+ * 2. expire applications left unanswered past `APPLICATION_TTL`;
+ * 3. resolve due, early or void proposals; expire lapsed kick confirmations;
+ * 4. snapshot housekeeping: expire a lapsed round, prune silent seats, close the epoch, pay an armed
+ *    round (with `source`, else the client's `snapshotSource`), close finished candidates;
+ * 5. claim this payer's relayer work, retire epochs, apply global settings, expire uploads.
+ * Names of steps that failed are pushed onto `failed`.
+ *
+ * `selfPay` (default on; owner, 30 September): a housekeeping step the program refuses as an ordinary
+ * refunded crank (the vault cannot fund a record, or the payer is no relayer; a self-paid proposal's
+ * record never needs it: its escrow repays whoever cranks it) is sent again as self-paid housekeeping: the vault funds what it can, the payer
+ * the rest and its own fee, nothing refunded. Governance and epochs never wait on treasury funds.
+ * Names of steps run self-paid are pushed onto `selfPaid`.
+ */
+export async function crankOnce(c, payer, { log = () => {}, failed = [], source = c.snapshotSource, selfPay = true, selfPaid = [] } = {}) {
+  const now = Math.floor(await c.t.now()), T = times(c.day ?? 86_400), done = [];
+  // `f(opts)`: tried as an ordinary crank first, then self-paid when the program refused that.
+  const step = async (name, f) => {
+    try {
+      try { await f({}); }
+      catch (e) { if (!selfPay || !e.refused) throw e; await f({ selfPaid: true }); selfPaid.push(name); log(`${name}: run self-paid`); }
+      done.push(name); log(name); return true;
+    } catch (e) { failed.push(name); log(`${name}: ${e.message.split('\n')[0]}`); return false; }
+  };
+  const agents = await c.all(TAG.AGENT), banned = new Set(agents.filter(a => a.status === 'banned').map(a => a.id));
+  let arts = await c.all(TAG.ARTIFACT);
+  // 1. A banned member counts on chain until pruned (critic C14); artifact 0 keeps its last member.
+  for (const a of arts) {
+    let left = a.members.length;
+    for (const m of a.members) if (banned.has(m.id) && (a.id !== 0 || left > 1) && await step(`prune ${m.id} from ${a.address}`, o => c.pruneBanned(a.address, m.id, payer, o))) left--;
+  }
+  // 2. Each member seated before an expired application is charged a skip (D3).
+  for (const a of agents) for (const s of a.applications) if (now >= s.at + T.applicationTtl)
+    await step(`expire application of ${a.id} to ${s.artifact}`, o => c.expireApplication(s.artifact, a.id, payer, o));
+  if (banned.size || agents.some(a => a.applications.length)) arts = await c.all(TAG.ARTIFACT);
+  const byAddress = new Map(arts.map(a => [a.address, a]));
+  // 3. A kick's window that closed inside a pause lapses a full window after the lift (review round 7).
+  const paused = await c.config();
   for (const p of await c.all(TAG.PROPOSAL)) {
-    if (p.status === 'voting' && (now >= p.closes || clears(p.approve, p.reject, p.roster.length, p.approveBps, p.rejectBps))) await step(`resolve ${p.address}`, () => c.resolve(p.address, payer));
-    if (p.status === 'confirmation_pending' && now >= p.confirmUntil) await step(`expire ${p.address}`, () => c.expire(p.address, payer));
+    const art = byAddress.get(p.artifact);
+    if (p.status === 'voting' && art) {
+      // A newcomer's contribution begins its upload with the second: no early verdict until the text has landed.
+      const landed = async () => p.payload.kind !== 'content' || (await c.maybe(p.payload.upload, decodeUpload))?.complete;
+      const { voided, due, early } = resolvable(p, art, now, banned);
+      if (voided || due || (early && await landed())) await step(`resolve ${p.address}`, o => c.resolve(p.address, payer, o));
+    }
+    if (p.status === 'confirmation_pending' && now >= kickDeadline(paused, p, now)) await step(`expire ${p.address}`, o => c.expire(p.address, payer, o));
   }
-  const cfg = await c.config();
-  if (cfg.pending.some(q => q.at <= now)) await step('apply global settings', () => c.applyGlobal(payer));
-  if (cfg.distributing !== null) await step(`distribute epoch ${cfg.distributing}`, () => c.distribute(payer));
-  else if (now >= cfg.epochStart + cfg.epochLen) {
-    await step(`close epoch ${cfg.epoch}`, () => c.closeEpoch(payer));
-    if ((await c.config()).distributing !== null) await step('distribute', () => c.distribute(payer));
+  // 4. An epoch closes while a distribution runs (rewards.rs `close_epoch`).
+  let cfg = await c.config(), book = await c.book();
+  if (cfg.distributing !== null && book && now >= book.deadline) await step(`expire round ${cfg.distributing}`, o => expireSnapshot(c, payer, o));
+  // A seat silent, or revealing only unpaid results, for PARTICIPATION rounds (snapshots.rs `Prune`).
+  if (book) {
+    [cfg, book] = await Promise.all([c.config(), c.book()]);
+    for (const s of await c.all(TAG.ATTESTOR)) if (prunable(s, book, cfg.distributing)) await step(`prune seat ${s.relay}`, o => pruneSeat(c, s.relay, payer, o));
   }
-  const relayers = await c.all(TAG.RELAYER);
+  // Due `EPOCH_LEN` after it started (rewards.rs; `times().epoch` for this build).
+  if (now >= cfg.epochStart + T.epoch) await step(`close epoch ${cfg.epoch}`, o => c.closeEpoch(payer, o));
+  [cfg, book] = await Promise.all([c.config(), c.book()]);
+  if (cfg.distributing !== null && book?.armed && now >= book.ready && !cfg.pause && source)
+    await step(`distribute epoch ${cfg.distributing}`, o => distributeSnapshot(c, payer, { source, ...o }));
+  const distributing = (await c.config()).distributing;
+  for (const k of await c.all(TAG.CANDIDATE)) if (k.epoch !== distributing) await step(`close candidate ${k.address}`, o => closeCandidate(c, k.epoch, k.hash, payer, o));
+  // 5.
+  const me = payer.publicKey.toBase58(), mine = (await c.all(TAG.RELAYER)).filter(r => r.key === me);
   for (const e of await c.all(TAG.EPOCH)) {
-    for (const r of relayers) for (const w of r.work) if (w.epoch === e.n && w.units > 0 && !w.claimed) await step(`claim ${e.n} for ${r.key}`, () => c.claim(e.n, r.key, payer));
-    const fresh = await c.maybe(c.epochAddress(e.n), (await import('./layout.mjs')).decodeEpoch);
-    if (fresh && (await c.config()).distributing !== e.n && (fresh.claimedWork === fresh.work || now >= fresh.end + (c.day ?? 86400))) await step(`retire epoch ${e.n}`, () => c.retire(e.n, payer));
+    for (const r of mine) for (const w of r.work) if (claimable(e, w)) await step(`claim work ${e.n} for ${r.key}`, () => c.claimWork(e.n, r.key, payer));
+    const fresh = await c.maybe(c.epochAddress(e.n), decodeEpoch);
+    if (fresh && (await c.config()).distributing !== e.n && (fresh.claimedWork === fresh.work || fresh.relayerPaid === fresh.relayerPool || now >= fresh.end + T.day)) await step(`retire epoch ${e.n}`, o => c.retire(e.n, payer, o));
   }
-  for (const u of await c.all(TAG.UPLOAD)) if (u.locked === '11111111111111111111111111111111' && now >= u.expires) await step(`expire upload ${u.address}`, () => c.expireUpload(u.address, payer));
+  cfg = await c.config();
+  if (cfg.pending.some(q => q.at <= now)) await step('apply global settings', o => c.applyGlobal(payer, o));
+  // A self-paid upload's expiry is never refunded (owner, 30 September): only the payer it returns to cranks it.
+  const vault = c.vault.toBase58();
+  for (const u of await c.all(TAG.UPLOAD)) if (u.locked === NONE && now >= u.expires && (u.funder === vault || u.funder === me))
+    await step(`expire upload ${u.address}`, o => c.expireUpload(u.address, payer, o));
   return done;
+}
+
+/**
+ * Runs a pass every `every` ms until `once` or `stopped()`; a failed pass is reported, never
+ * fatal. Resolves true when the last pass completed without throwing. With `register` ({ kind,
+ * url }), a pass first registers the payer as a relayer when it is not one: the program refunds and
+ * accepts housekeeping only from a registered relayer, and registering is permissionless (29
+ * September review).
+ */
+export async function runCranker(c, payer, { every = 30_000, once = false, stopped = () => false, sleep = ms => new Promise(r => setTimeout(r, ms)), log = () => {}, error = () => {}, register = null, ...options } = {}) {
+  if (!Number.isFinite(every) || every < 0) throw Error('every must be a non-negative number of milliseconds');
+  const pass = async () => {
+    if (register && !(await c.raw(c.relayerAddress(payer.publicKey)))) {
+      await c.registerRelayer(payer, register); log(`registered ${payer.publicKey.toBase58()} as a relayer`);
+    }
+    return crankOnce(c, payer, { ...options, log });
+  };
+  for (;;) {
+    let ok = true;
+    await pass().catch(e => { ok = false; error(e.message); });
+    if (once || stopped()) return ok;
+    // Always pace scans, including when work was done, to avoid a busy RPC loop.
+    await sleep(every);
+    if (stopped()) return ok;
+  }
 }
