@@ -16,7 +16,8 @@ export const SIZE = { AGENT: L.SIZE.AGENT, ARTIFACT: L.SIZE.ARTIFACT, UPLOAD: L.
 /** Why the program refuses everything a banned agent signs (lib.rs `signed`, owner 29 September). */
 export const BANNED = 'banned by the meta-council: a banned agent signs nothing, key changes and withdrawals included';
 const bytes = s => Buffer.byteLength(s ?? '', 'utf8');
-const rentOf = t => size => t.rent ? t.rent(size) : (size + 128) * 6960;
+/** The live rent-exempt minimum (the transport reads the cluster's Rent: getMinimumBalanceForRentExemption). */
+const rentOf = t => size => t.rent(size);
 const weekOf = (c, now) => Math.floor(now / (7 * (c.day ?? 86400)));
 
 /** `cfg` after treasury.rs `roll_week` at `now`: the spending ring the reserve target averages. The

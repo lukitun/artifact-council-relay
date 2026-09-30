@@ -138,27 +138,34 @@ export class RpcTransport {
     // Every copy is byte-identical and simulated first. `out` turns true once a copy may have
     // reached a leader; from then on a refusal is final only if the cluster has no status for it.
     let out = false;
-    for (let tick = 0; tick < this.polls; tick++) {
-      if (tick % this.resend === 0) {
-        try { await this.call1('sendTransaction', [wire, { encoding: 'base64', preflightCommitment: this.commitment, maxRetries: 3 }]); out = true; }
-        catch (e) {
-          if (/already been processed/i.test(e.message)) out = true;
-          else if (/blockhash not found/i.test(e.message)) { if (!out) return { signature, rebuild: 'unseen' }; }
-          else if (refused(e)) {
-            // `unsent`: preflight refused the first copy, so nothing reached a leader and no fee was paid.
-            if (!out || !await status()) { const logs = e.rpc?.data?.logs; throw Object.assign(Error(`${e.message}${logs ? '\n' + logs.join('\n') : ''}`), { logs, refused: true, signature, unsent: !out }); }
+    // An error once a copy is out (a status or block-height read that failed) carries the signature:
+    // the transaction may still land, so it is never taken for one that never left.
+    try {
+      for (let tick = 0; tick < this.polls; tick++) {
+        if (tick % this.resend === 0) {
+          try { await this.call1('sendTransaction', [wire, { encoding: 'base64', preflightCommitment: this.commitment, maxRetries: 3 }]); out = true; }
+          catch (e) {
+            if (/already been processed/i.test(e.message)) out = true;
+            else if (/blockhash not found/i.test(e.message)) { if (!out) return { signature, rebuild: 'unseen' }; }
+            else if (refused(e)) {
+              // `unsent`: preflight refused the first copy, so nothing reached a leader and no fee was paid.
+              if (!out || !await status()) { const logs = e.rpc?.data?.logs; throw Object.assign(Error(`${e.message}${logs ? '\n' + logs.join('\n') : ''}`), { logs, refused: true, signature, unsent: !out }); }
+            }
+            // Any other fault might have followed acceptance: never rebuild early after it.
+            else if (!out && !transient(e)) throw e;
+            else out = true;
           }
-          // Any other fault might have followed acceptance: never rebuild early after it.
-          else if (!out && !transient(e)) throw e;
-          else out = true;
         }
+        const s = await status();
+        if (s?.confirmationStatus === 'confirmed' || s?.confirmationStatus === 'finalized') return { signature };
+        if (!s && (tick + 1) % this.resend === 0 && await expired() && !await status()) return { signature, rebuild: 'expired' };
+        await this.sleep(this.poll);
       }
-      const s = await status();
-      if (s?.confirmationStatus === 'confirmed' || s?.confirmationStatus === 'finalized') return { signature };
-      if (!s && (tick + 1) % this.resend === 0 && await expired() && !await status()) return { signature, rebuild: 'expired' };
-      await this.sleep(this.poll);
+      throw Object.assign(Error(`unconfirmed transaction ${signature}`), { signature });
+    } catch (e) {
+      if (out && !e?.signature) throw Object.assign(e instanceof Error ? e : Error(String(e)), { signature });
+      throw e;
     }
-    throw Object.assign(Error(`unconfirmed transaction ${signature}`), { signature });
   }
   // A copy that landed and failed was refused by the program at execution, as final as a preflight
   // refusal. It is marked refused only with its logs, so a payer shortfall stays told apart.

@@ -3,7 +3,8 @@
 import { PublicKey, Keypair, TransactionInstruction, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from '@solana/web3.js';
 import nacl from 'tweetnacl';
 import * as L from './layout.mjs';
-import { frameText, textFromSources } from './frame-store.mjs';
+import { DEVNET_GENESIS, MAINNET_GENESIS } from './cluster.mjs';
+import { textFromSources } from './frame-store.mjs';
 import { compileV1, checkSelfPaidMessage, checkSelfPaidBatch, envelopeConsent } from './v1.mjs';
 export { checkSelfPaidMessage, checkSelfPaidBatch, envelopeConsent };
 export * from './layout.mjs';
@@ -12,7 +13,9 @@ export { PublicKey, Keypair };
 export const ED25519 = new PublicKey('Ed25519SigVerify111111111111111111111111111');
 export const TOKEN_2022 = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 export const TOKEN = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-export const DEVNET_GENESIS = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
+// The genesis hashes live with the one cluster setting of our own services (sdk/cluster.mjs,
+// AC_CLUSTER); the operator package's network is NETWORK below.
+export { DEVNET_GENESIS, MAINNET_GENESIS };
 /** The live devnet program: the operator package's one default for AC_PROGRAM (release 29 September). */
 export const DEVNET_PROGRAM = 'GhnzdPL4hguV8mnQXaRrS8pnYKgBaS4zA6tE9GMFUyme';
 /** Solana mainnet-beta, for the mainnet package (`npm run build:relay:mainnet`, operator guide "A
@@ -20,7 +23,6 @@ export const DEVNET_PROGRAM = 'GhnzdPL4hguV8mnQXaRrS8pnYKgBaS4zA6tE9GMFUyme';
  *  `export const NETWORK = MAINNET;`, and nothing else changed. MAINNET_PROGRAM is a placeholder
  *  (null) until launch: setting it to the launched program is the one reviewed edit; until then the
  *  build refuses to publish a mainnet archive and a trial package's self-check refuses to run. */
-export const MAINNET_GENESIS = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
 export const MAINNET_PROGRAM = null;
 export const MAINNET = Object.freeze({ name: 'mainnet-beta', genesis: MAINNET_GENESIS, program: MAINNET_PROGRAM, faucet: null, publicRpc: 'https://api.mainnet-beta.solana.com' });
 /** The one network the operator package runs on: every cluster check, faucet line and network name

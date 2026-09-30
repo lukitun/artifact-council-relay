@@ -14,7 +14,7 @@
     },
     {
       "file": ".env.example",
-      "sha256": "4aa66792fce233ca99549bad59c27c9eeb6512239960b0aa8f08ff14f40d2b7c"
+      "sha256": "82977b6c066f63dc0fa0e97e6e6162c442c8f58460c9a5a2b16362572edf6803"
     },
     {
       "file": ".gitignore",
@@ -22,7 +22,7 @@
     },
     {
       "file": "ac-relay.mjs",
-      "sha256": "c10a62da0cefc86e8d99a7d0c12291702d3d4b5167fc269f97163cea7c63961d"
+      "sha256": "9940a2ae1bf2fb8bc7b94a5947295097363db7a21a7539de0838778f12cec4a0"
     },
     {
       "file": "check.mjs",
@@ -30,7 +30,7 @@
     },
     {
       "file": "README.md",
-      "sha256": "4867b4e23d10fc3afa50a9401cfdd731724d8450910e44c7e3d6019f9bf97754"
+      "sha256": "c104559dae7fc85fef2f5b924e9d88ca3ba75ff1a2dc4f2231d93606571dd687"
     },
     {
       "file": "LICENSE",
@@ -58,7 +58,7 @@
     },
     {
       "file": "sdk/index.mjs",
-      "sha256": "26350947bd5e6b2344bac6c536b1b3a8498c58b6927953c4b9f4166293df1156"
+      "sha256": "af494b210aaea42f0485c67e7e6a763e65e4924651d4a4f85e6da23f6a411ab8"
     },
     {
       "file": "sdk/layout.mjs",
@@ -66,7 +66,7 @@
     },
     {
       "file": "sdk/transport.mjs",
-      "sha256": "9b3d76acc12c61b973c5e8905213c7ade4b3fb462c61beee7ff45e9a71e144ef"
+      "sha256": "5abba1b528d67456ea3b20517faa81e84e7a2fa5833b8a9020db88291131598d"
     },
     {
       "file": "sdk/v1.mjs",
@@ -102,7 +102,7 @@
     },
     {
       "file": "sdk/funding.mjs",
-      "sha256": "288f95bf50adc1e16351da81b30f001e1988cc0c8a80701bbc2e5243ad55868a"
+      "sha256": "428c7635a290643c5620b8c5ab219df7f4369458809023735cd126b5b73c8b31"
     },
     {
       "file": "sdk/relay-spend.mjs",
@@ -130,15 +130,15 @@
     },
     {
       "file": "sdk/refusals.mjs",
-      "sha256": "0a8a3fcbbfcf8b7aa657a0c89b25f69d8c1b9f313d1a3fcc24f8322b7b6dbf95"
+      "sha256": "3cb50952bfec2fe6ea2a5e2995397268ef825f4b3b7fb3735f15b6a9bf812597"
     },
     {
       "file": "sdk/alerts.mjs",
-      "sha256": "0ae7f4a0015d37b838619be56eec65710b515c87eb3ee5c2b0ced87ddbf4a997"
+      "sha256": "943065d0228738b1a499272bc8b6cfe68f00691874e7e30e6732d77c924ce995"
     },
     {
       "file": "sdk/notify.mjs",
-      "sha256": "e6bdd2901faad3d14262b8d90d8e287950615805f03cbf4297164369d76415b9"
+      "sha256": "799e02ddfe5a5ba1bb1c32f0054d3000f6ea5539a4f7b77eda5591e7e4703c84"
     },
     {
       "file": "sdk/inbox.mjs",
@@ -146,7 +146,7 @@
     },
     {
       "file": "sdk/inbox-digest.mjs",
-      "sha256": "94dbef2f0daf800bbd1732fa0733e571e776dae8e2a754c36356dacaf40f2289"
+      "sha256": "4673b97cf4e3f48fd2dbe9b69c7b3eaeba09d035f67bc0ac188eaea66688d4bc"
     },
     {
       "file": "sdk/snapshot-seat.mjs",
@@ -169,8 +169,20 @@
       "sha256": "4ed5c20edb4d36f3b2cc9fdf5bd26645f071cea5c90080a67ea7049758b07dc2"
     },
     {
+      "file": "sdk/cluster.mjs",
+      "sha256": "3aef0d18fd5096d422e415b3709ec814ccf2fb07c290bb8d17b70c7c07c022bd"
+    },
+    {
+      "file": "sdk/creator-fees.mjs",
+      "sha256": "df83d8be2f0096e9ade1dbf5029544612ef33d2c06af680e1be520a46afa9033"
+    },
+    {
+      "file": "sdk/pump.mjs",
+      "sha256": "e4121fc2e3acdabf99c3fb9cf908654676f70f85e9b9df20c8192d065f2ce536"
+    },
+    {
       "file": "scripts/relay-server.mjs",
-      "sha256": "a2b620bbc71035919b2b83ff9461e305b33af4f9cdd1ee2450c1095695b44552"
+      "sha256": "14a70f71946fd505206fdc37f44e1abe9fc200609daa0cf1539eb57fcdfed335"
     },
     {
       "file": "scripts/http-agent.mjs",

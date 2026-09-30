@@ -141,7 +141,7 @@ export async function page(alerts, { notifier, statePath, now = Date.now(), repe
   const firing = alerts.filter(a => !open[a.key] || now - open[a.key].paged >= repeatMs);
   const resolved = resolve ? Object.keys(open).filter(k => !current.has(k)) : [];
   if (!firing.length && !resolved.length) return { sent: false, firing: [], resolved: [] };
-  if (!notifier) throw Error('alerts need paging but no notifier is configured (set AC_COLONY_KEY_FILE)');
+  if (!notifier) throw Error('alerts need paging but no notifier is configured (load the colony-api-key credential or set AC_COLONY_KEY_FILE)');
   const text = [`${source}: ${alerts.length} alert${alerts.length === 1 ? '' : 's'} open`, ...firing.map(a => `FIRING ${oneLine(a.message)}`), ...resolved.map(k => `RESOLVED ${oneLine(k)}`)].join('\n');
   await notifier.send({ source, at: new Date(now).toISOString(), text, open: alerts.length,
     firing: firing.map(a => ({ ...a, since: new Date(open[a.key]?.since ?? now).toISOString() })), resolved });

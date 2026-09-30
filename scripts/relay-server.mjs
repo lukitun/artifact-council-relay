@@ -1,7 +1,11 @@
 // Open relay and custodial gateway for Artifact Council v2. Anyone can run it:
 //
-//   node scripts/relay-server.mjs --rpc URL --program ID --key payer.json [--port 8899] [--gateway DIR]
+//   node scripts/relay-server.mjs --rpc URL --program ID --key payer.json [--cluster devnet|mainnet] [--port 8899] [--gateway DIR]
 //     [--route-peers 1] [--crank-seconds 60] [--per-minute 60] [--newcomer-reads 20]
+//
+// --cluster (AC_CLUSTER, devnet when unset) is the one cluster setting (sdk/cluster.mjs): the relay
+// refuses an RPC that answers another cluster's genesis before it registers, cranks or relays
+// anything, and mainnet has no public fallback RPC (--rpc or AC_RPC is required there).
 //
 // Requests are budgeted per client address (IPv6 per /64) in fixed one-minute windows: --per-minute
 // (default 60), plus --newcomer-reads extra reads (GET) in an address's first minute (default 20). A
@@ -40,6 +44,12 @@
 // proposal's record) runs self-paid, this wallet paying it within the daily ceiling (owner, 30
 // September: governance and epochs never wait on treasury funds); --crank-self-pay 0 leaves it to others. There is no switch to turn it off (decision 8); scripts/cranker.mjs is for
 // operators who crank without a relay, never next to one.
+// With --creator-fees on (our relays, owner 30 September; off by default) this relay also moves the
+// configured mint's pump.fun and PumpSwap creator fees into the vault once an epoch, paying from this
+// wallet within --creator-fee-budget lamports an epoch (and at most --creator-fee-fallbacks WSOL
+// fallbacks a UTC day, default 2, 0 off: each fronts a rent the relay never gets back), after checking the creator is the vault
+// (sdk/creator-fees.mjs). Every signature goes to <--state>/creator-fees/signatures.jsonl; a creator
+// mismatch, pump 6049 or repeated failures page like the relay's other alerts.
 // With --attest (and --snapshots DIR) this relay also works its attestor seat (sdk/snapshot-seat.mjs,
 // snapshot-spec §6): fix, compute, commit, reveal, veto on proof, and publish its datasets at
 // GET /v2/snapshots. Payment is left to the crank, which pays the armed result from the same
@@ -47,7 +57,7 @@
 // archive of paid rounds (ac-devnet-archive) once the seat has pruned them (review round 10). Join and
 // leave are operator commands (scripts/snapshot-rewards.mjs; the owner funds our seats' bonds, 29 September).
 // --ours K,K names the operator's own seats; any other active seat pages. Seat alerts page as Colony
-// DMs when AC_COLONY_KEY_FILE is set, and are logged otherwise. So do the relay's own alerts (a failed
+// DMs with a Colony key (the colony-api-key credential or AC_COLONY_KEY_FILE), and are logged otherwise. So do the relay's own alerts (a failed
 // hosted-key sweep, the spend ledger's daily warning and ceiling), which always reach the log too.
 // With --route-peers, funded envelopes go to registered relays that earned work recently, falling
 // through to the next and finally to this relay (sdk/relay-pool.mjs).
@@ -63,6 +73,7 @@ import { randomBytes } from 'node:crypto';
 import nacl from 'tweetnacl';
 import { Council, Keypair, PublicKey, decodeEnvelope, decodeUpload, encodeFrame, chain, stagedUpload, times, TAG, MAX_DECLINES, META_KINDS, META_APPROVE_BPS } from '../sdk/index.mjs';
 import { RpcTransport } from '../sdk/transport.mjs';
+import { clusterOf, rpcFor, checkCluster } from '../sdk/cluster.mjs';
 import { colonyVerifier, validColonyId, ARTIFACT_COUNCIL_COLONY_ID } from '../sdk/colony.mjs';
 import { threadStore, threadPost, postProblem, threadUrl, actionKey, POST_ACTIONS, POST_ID, PENDING_ID, OPEN_MOST, NOTE_MAX, RETRY_MS, SKEW_MS, PLANNED_THREAD } from '../sdk/gateway-threads.mjs';
 import { hostedKey, migrationIdentities } from '../sdk/identities.mjs';
@@ -73,16 +84,17 @@ import { relayPool, MAX_HOPS } from '../sdk/relay-pool.mjs';
 import { crankOnce } from '../sdk/cranks.mjs';
 import { seatStore, snapshotFile, runSeat, armedSnapshotSource } from '../sdk/snapshot-seat.mjs';
 import { page } from '../sdk/alerts.mjs';
-import { notifierFromEnv, messengerFromEnv, oneLine } from '../sdk/notify.mjs';
+import { notifierFromEnv, messengerFromEnv, colonyKeyFile, oneLine } from '../sdk/notify.mjs';
 import { inboxOf, contributionUploads } from '../sdk/inbox.mjs';
 import { digestContacts, digestPass, subscribeMessage, unsubscribeMessage } from '../sdk/inbox-digest.mjs';
 import { vaultFunds, chunkWritesFunded, feePayerNeeds, SELF_PAID } from '../sdk/funding.mjs';
 import { spendLedger } from '../sdk/relay-spend.mjs';
 import { checkRequest } from '../sdk/request-checks.mjs';
 import { exactRefusal, explainRefusal, pageRoom, pageRange, titleOk } from '../sdk/refusals.mjs';
-import { clientAddress, clientBucket, normalizeAddress, LOOPBACK } from '../sdk/client-address.mjs';
+import { clientAddress, normalizeAddress, LOOPBACK } from '../sdk/client-address.mjs';
 import { planSend, planSweep, sweepJobs, sweepBackoff, sweepMessage, holdings, tokenOf, toBaseUnits, fromBaseUnits, donationInstructions, donationTransaction, donationsTo, donationsSince,
   logLine, custodyWarning, TX_FEE, unlockLamports } from '../sdk/hosted-funds.mjs';
+import { creatorFeeCranker, creatorFeeOptions, creatorFeeSettings } from '../sdk/creator-fees.mjs';
 
 const arg = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : process.env[`AC_${name.toUpperCase().replace(/-/g, '_')}`] ?? fallback; };
 const flag = name => process.argv.includes(`--${name}`) || /^(1|true|yes)$/i.test(process.env[`AC_${name.toUpperCase().replace(/-/g, '_')}`] ?? '');
@@ -128,17 +140,18 @@ export async function startRelay({ rpc, program, payer, port = 8899, host = '127
   seed = colony?.seed, tokenTtlMs, denylistFile = gatewayDir ? `${gatewayDir}/denylist.txt` : null, identityPerMinute = 30, verifyPerMinute = 12, startsPerMinute = Infinity,
   proxySecret = null, attestationsFile = gatewayDir ? `${gatewayDir}/colony-attestations.json` : null, attestedOnly = true, sweepMs = 3_600_000,
   stateDir = gatewayDir ? `${gatewayDir}/state` : null, dailyCeiling = 100_000_000, allow = [], alert, clock, day, pool: poolOptions = {}, crank = null, trustedProxies = LOOPBACK, edgeSecret = null, snapshotDir = null, snapshotArchive = null, snapshotUrl = undefined, attest = null, digest = null, inboxCacheMs = 2_000,
-  sendsPerHour = 6, sendConfirmMs = 120_000, sweepRetryMs = 300_000, manualSweepMs = 600_000, donationReadsPerMinute = 60, operator, notifier = notifierFromEnv(), readOnly = false }) {
+  sendsPerHour = 6, sendConfirmMs = 120_000, sweepRetryMs = 300_000, manualSweepMs = 600_000, donationReadsPerMinute = 60, operator, notifier = notifierFromEnv(), readOnly = false, cluster = null, creatorFees = null }) {
   // A read-only relay (the operator package's preview and its public-URL check before registering):
   // it serves reads, signs its answers with `payer`, and never registers, cranks, attests, hosts or sends.
-  if (readOnly && (crank || attest || digest || gatewayDir)) throw Error('a read-only relay neither cranks, attests, sends digests nor hosts identities');
+  if (readOnly && (crank || attest || digest || gatewayDir || creatorFees)) throw Error('a read-only relay neither cranks, attests, sends digests, collects creator fees nor hosts identities');
   // Anonymous hosting spends the gateway's SOL for anyone who asks.
   if (openRegister && publicGateway(url, host)) throw Error('--open-register lets anyone spend this wallet; it is refused on a public gateway (public --url or non-loopback --host)');
   const allowed = new Set(allow.map(k => new PublicKey(k).toBase58()));
   // Bad crank settings are refused before anything is paid for.
   if (crank) crankTiming(crank);
+  if (creatorFees) creatorFeeOptions({ dir: stateDir && `${stateDir}/creator-fees`, ...creatorFees });
   // The relay's alerts (a failed hosted-key sweep, the spend ledger's warning and ceiling) always reach
-  // the journal and, with a Colony key (AC_COLONY_KEY_FILE), page the owner as Colony DMs like the
+  // the journal and, with a Colony key (the colony-api-key credential or AC_COLONY_KEY_FILE), page the owner as Colony DMs like the
   // seat's (owner, 29 September: alerts are Colony DMs to lukitun). `alert` replaces both (tests).
   const alarm = alert ?? (line => {
     console.error(line);
@@ -152,9 +165,12 @@ export async function startRelay({ rpc, program, payer, port = 8899, host = '127
   // opted in through this gateway's Colony verification: it needs both (product review 5B item 1).
   if (digest && (!gatewayDir || !colony)) throw Error('--digest needs --gateway and --colony: it DMs this gateway\'s Colony identities');
   if (digest && !['on', 'dry-run'].includes(digest.mode)) throw Error('--digest must be on, dry-run or off');
-  if (digest?.mode === 'on' && !digest.messenger) throw Error('--digest on needs the Colony key (AC_COLONY_KEY_FILE)');
+  if (digest?.mode === 'on' && !digest.messenger) throw Error('--digest on needs the Colony key: load the colony-api-key credential or set AC_COLONY_KEY_FILE');
   if (edgeSecret !== null && (typeof edgeSecret !== 'string' || edgeSecret.length < 32)) throw Error('the edge proxy secret must be at least 32 characters');
   const t = transport ?? new RpcTransport(rpc);
+  // The cluster setting (AC_CLUSTER): another cluster's RPC is refused before anything registers,
+  // cranks or relays (owner, 30 September: one setting for devnet and mainnet).
+  if (cluster) await checkCluster(t, cluster, 'the relay\'s RPC');
   const c = new Council({ transport: t, program });
   if (day) c.day = day;
   // The armed dataset, hash-checked: our own seat's, else any seat's, else --snapshot-url (review round 10).
@@ -354,7 +370,7 @@ export async function startRelay({ rpc, program, payer, port = 8899, host = '127
   }
   const sweepView = j => j && { status: j.status, from: j.from, to: j.result?.to ?? j.to, ...(j.result ? { moved: { sol: j.result.sol, ac: j.result.ac }, signature: j.result.signature, dust: j.result.dust } : {}),
     // What could not move without leaving the gateway paying for it: the agent unlocks it.
-    ...(j.result?.left && (j.result.left.sol || j.result.left.ac !== '0') ? { left: j.result.left, unlock: `fund your new key (at least its rent-exempt minimum) and create its AC token account, or send the old key ${(j.result.left.sendOld ?? unlockLamports(j.result.left.sol, 890_880)).toLocaleString('en-US')} lamports; then run the sweep again` } : {}),
+    ...(j.result?.left && (j.result.left.sol || j.result.left.ac !== '0') ? { left: j.result.left, unlock: `fund your new key (at least its rent-exempt minimum) and create its AC token account, or send the old key ${j.result.left.sendOld !== undefined ? `${j.result.left.sendOld.toLocaleString('en-US')} lamports` : `two fees (${(2 * TX_FEE).toLocaleString('en-US')} lamports)${j.result.left.sol > 0 ? '' : ' plus its rent-exempt minimum'}`}; then run the sweep again` } : {}),
     ...(j.status === 'pending' ? { attempts: j.attempts, error: j.lastError, retryAt: j.next ? new Date(j.next).toISOString() : null } : {}),
     again: 'POST /v2/hosted/sweep { agent, time, signature } signed by your current key over "ACv2 sweep <program> <agent> <time>"' };
   // A hosted send is quoted, then confirmed with the same token within `sendConfirmMs`: the
@@ -562,7 +578,7 @@ export async function startRelay({ rpc, program, payer, port = 8899, host = '127
    *  gateway's own wallet never pays. `free`: what costs nothing instead, where something does. */
   async function feePayerCanPay(feePayer, funding, { hosted = false, free = null } = {}) {
     const from = new PublicKey(feePayer).toBase58(), need = funding.worst, n = funding.transactions ?? 1;
-    const [balance, floor] = await Promise.all([t.getAccount(new PublicKey(feePayer)).then(a => a?.lamports ?? 0), t.rent ? t.rent(0) : 890_880]);
+    const [balance, floor] = await Promise.all([t.getAccount(new PublicKey(feePayer)).then(a => a?.lamports ?? 0), t.rent(0)]);
     const left = balance - need, needs = feePayerNeeds(need, n, floor);
     const what = n > 1 ? `${needs}: the ${need} its ${n} transactions take, and the rent-exempt minimum of ${floor} left after them (the network refuses a transaction that leaves the key with less than that minimum but more than nothing, and a key left with nothing cannot pay the transactions that follow)`
       : `${need}, leaving either nothing or at least ${floor}`;
@@ -1975,6 +1991,10 @@ export async function startRelay({ rpc, program, payer, port = 8899, host = '127
   const cranker = crank ? relayCranker(crank) : null;
   const seat = attest ? relaySeat(attest) : null;
   const digester = digest ? relayDigest(digest) : null;
+  // The creator-fee crank (owner, 30 September; sdk/creator-fees.mjs): its own cadence and state, this
+  // wallet paying within its bound per epoch and the daily ceiling; its pages go where the relay's go.
+  const feeCranker = creatorFees ? creatorFeeCranker(c, payer, { dir: stateDir && `${stateDir}/creator-fees`, notifier, ledger, ...creatorFees }) : null;
+  if (feeCranker) server.on('close', () => feeCranker.stop());
   /** The inbox digest's loop (sdk/inbox-digest.mjs): a pass every `every` ms, the first after `first`.
    *  Each pass DMs only whom the contacts allow, at most once a day each plus the removal-risk DM a
    *  day before such a deadline; `dry-run` prints the DMs to the log and sends and records nothing. */
@@ -2058,7 +2078,7 @@ export async function startRelay({ rpc, program, payer, port = 8899, host = '127
       timer = setTimeout(() => pass().finally(() => schedule(false)), first ? Math.floor(r * every) : every + Math.round((2 * r - 1) * jitter));
       timer.unref?.();
     };
-    return { status: () => ({ ...status }), start: () => schedule(true), stop: () => { stopped = true; clearTimeout(timer); }, pass };
+    return { status: () => ({ ...status, ...(feeCranker ? { creatorFees: feeCranker.status() } : {}) }), start: () => schedule(true), stop: () => { stopped = true; clearTimeout(timer); }, pass };
   }
   server.on('close', () => { cranker?.stop(); seat?.stop(); digester?.stop(); });
   await new Promise((r, j) => { server.once('error', j); server.listen(port, host, () => { server.off('error', j); r(); }); });
@@ -2081,7 +2101,8 @@ export async function startRelay({ rpc, program, payer, port = 8899, host = '127
     const timer = setInterval(retry, sweepRetryMs); timer.unref(); server.on('close', () => clearInterval(timer));
   }
   cranker?.start(); seat?.start(); digester?.start();
-  return { server, council: c, spend: ledger.status, holding, cranker, digester, sweeps, runSweep, url: `http://127.0.0.1:${server.address().port}` };
+  feeCranker?.start();
+  return { server, council: c, spend: ledger.status, holding, cranker, digester, sweeps, runSweep, creatorFees: feeCranker, url: `http://127.0.0.1:${server.address().port}` };
 }
 
 function crankTiming({ every = 60_000, jitter = Math.floor(every / 4), stall = Math.max(10 * every, 600_000), selfPay: _selfPay }) {
@@ -2114,7 +2135,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     colony = { verifier: colonyVerifier({ apiKey: process.env.COLONY_API_KEY }), seed,
       siteAgentId: migrationIdentities(manifest) };
   }
-  const { url } = await startRelay({ rpc: arg('rpc', 'https://api.devnet.solana.com'), program: new PublicKey(arg('program')), payer,
+  // One cluster setting (sdk/cluster.mjs): --cluster or AC_CLUSTER, devnet when unset; mainnet names its RPC.
+  const cluster = clusterOf(arg('cluster'));
+  // Where pages and the digest get the Colony key (a path, never the key), before anything can fail on the RPC.
+  console.log(colonyKeyFile() ? `Colony key for pages and the digest: ${colonyKeyFile()}` : 'no Colony key: alerts stay in the journal');
+  const { url } = await startRelay({ rpc: rpcFor(cluster, arg('rpc')), cluster, program: new PublicKey(arg('program')), payer,
     port: Number(arg('port', 8899)), host: arg('host', '127.0.0.1'), gatewayDir: arg('gateway', null), url: arg('url', ''), colony, seed,
     ...(arg('denylist') ? { denylistFile: arg('denylist') } : {}), ...(arg('attestations') ? { attestationsFile: arg('attestations') } : {}),
     snapshotDir: arg('snapshots', null), snapshotArchive: arg('snapshot-archive', null), snapshotUrl: arg('snapshot-url', undefined),
@@ -2125,14 +2150,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     stateDir: arg('state', new URL(`../.local/relay-state/${payer.publicKey.toBase58()}`, import.meta.url).pathname),
     dailyCeiling: Number(arg('daily-ceiling', 100_000_000)), allow: String(arg('allow', '')).split(',').filter(Boolean),
     routePeers: arg('route-peers', '0') === '1', crank: { every: Math.round(Number(arg('crank-seconds', 60)) * 1000), selfPay: arg('crank-self-pay', '1') === '1' },
+    // --creator-fees on|off (default off) and its --creator-fee-* settings (sdk/creator-fees.mjs).
+    creatorFees: creatorFeeSettings(n => arg(n)),
     openRegister: flag('open-register'), perMinute: Number(arg('per-minute', 60)), newcomerReads: Number(arg('newcomer-reads', 20)),
     sendsPerHour: Number(arg('sends-per-hour', 6)), donationReadsPerMinute: Number(arg('donation-reads-per-minute', 60)),
     // Who the custody warning names as holding hosted keys; by default "Artifact Council" only on artifactcouncil.com.
     ...(arg('operator-name') ? { operator: arg('operator-name') } : {}),
     trustedProxies: String(arg('trusted-proxy', LOOPBACK.join(','))).split(',').map(s => s.trim()).filter(Boolean),
     edgeSecret: arg('edge-secret-file') ? readFileSync(arg('edge-secret-file'), 'utf8').trim() : null,
-    // --digest on|dry-run|off (default off): the inbox digest's Colony DMs, sent with AC_COLONY_KEY_FILE.
+    // --digest on|dry-run|off (default off): the inbox digest's Colony DMs, sent with the Colony key.
     digest: ['on', 'dry-run'].includes(arg('digest', 'off')) ? { mode: arg('digest'), every: Math.round(Number(arg('digest-minutes', 60)) * 60_000),
       messenger: arg('digest') === 'on' ? messengerFromEnv() : null } : arg('digest', 'off') === 'off' ? null : (() => { throw Error('--digest must be on, dry-run or off'); })() });
-  console.log(`Artifact Council relay ${payer.publicKey.toBase58()} at ${url}/v2`);
+  console.log(`Artifact Council relay ${payer.publicKey.toBase58()} on ${cluster} at ${url}/v2`);
 }

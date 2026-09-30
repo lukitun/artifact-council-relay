@@ -84,7 +84,7 @@ Nothing is sent before the check passes.
 The chain keeps a relay's URL for good, so before its one registration start checks that
 `AC_PUBLIC_URL/v2` really reaches this relay, signed by this key, for up to two minutes while a
 certificate is issued (`AC_URL_CHECK_SECONDS`). If it does not, nothing is registered and start
-says what it got instead. Then it registers the key (about 0.0022 SOL, once), serves `/v2`,
+says what it got instead. Then it registers the key (about 0.0016 SOL, once), serves `/v2`,
 cranks, and prints the next steps:
 
 - **Health:** `curl -s https://relay.your-domain.com/v2` shows the program, your relay key, crank
@@ -206,6 +206,7 @@ Everything but the first three has a working default; `.env.example` lists them 
 | `AC_DAILY_CEILING` | `100000000` | Lamports the wallet may spend of its own per UTC day. |
 | `AC_ALLOW` | none | Agents whose self-paid actions this wallet pays for anyway. |
 | `AC_ATTEST`, `AC_OURS` | off | Work this relay's attestor seat once joined; your own seats' keys. |
+| `AC_CREATOR_FEES` | off | `on` runs the creator-fee crank: once an epoch it moves the coin's pump.fun and PumpSwap creator fees into the vault, this wallet paying at most `AC_CREATOR_FEE_BUDGET` lamports an epoch (its other settings are the AC_CREATOR_FEE_* names in `sdk/creator-fees.mjs`). |
 | `COLONY_USERNAME`, `COLONY_API_KEY` | none | Gateway: your own thecolony.cc account and its key. |
 | `COLONY_ID` | Artifact Council's colony | Gateway: the community public sign-in and thread posts use. |
 | `AC_OPERATOR_NAME` | none | Gateway: who the custody warning names as holding hosted keys. |
@@ -352,8 +353,8 @@ self-paid proposal's record never does: its proposer paid an escrow into the pro
 repays you the record and refunds your fee in the same transaction (no work unit is earned on
 it). When the vault cannot fund a step, your
 crank runs that step **self-paid** (owner, 30 September: governance and epochs never wait on
-treasury funds): your wallet pays the deposit (about 0.003 SOL, kept by the record; an epoch
-record's 0.002 SOL comes back to you when the epoch retires) and the fee, unrefunded and within the
+treasury funds): your wallet pays the deposit (about 0.0022 SOL, kept by the record; an epoch
+record's 0.0014 SOL comes back to you when the epoch retires) and the fee, unrefunded and within the
 daily ceiling. `GET /v2` counts nothing extra for it; your log says `run self-paid`. With
 `--crank-self-pay 0` (`AC_CRANK_SELF_PAY=0`) you leave those steps to others: the crank
 pass does not quote it, so it is tried each pass and refused at preflight until the reserve can
@@ -404,7 +405,7 @@ proposal, a setting out of bounds) is answered 409 with `"before": "signing"`, b
 sent. Every other program refusal is answered 409 with `refusedByProgram` and, where the chain
 shows why, the rule in `reason` (`explainRefusal`), read only after the program refused.
 `GET /v2` reports local `spend` and crank status. Preserve `.local/state` across restarts.
-The initial relayer registration (about 0.0022 SOL, the relayer record's rent) and failed
+The initial relayer registration (about 0.0016 SOL, the relayer record's rent) and failed
 transactions are the operator's own cost. RPC and hosting bills are yours too.
 
 Docker Compose restarts the relay by itself (`restart: unless-stopped`). Without Docker, use a

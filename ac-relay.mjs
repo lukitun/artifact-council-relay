@@ -26,6 +26,7 @@ import { snapshotFunds } from './sdk/funding.mjs';
 import { joinSeat, activateSeat, leaveSeat, withdrawSeat } from './sdk/snapshots.mjs';
 import { planWithdraw, sendWithdraw, pendingRewards, parseSol, DEFAULT_KEEP } from './sdk/payout.mjs';
 import { startRelay, gatewaySettings } from './scripts/relay-server.mjs';
+import { creatorFeeSettings } from './sdk/creator-fees.mjs';
 import { LOOPBACK } from './sdk/client-address.mjs';
 import { selfCheck, report, nextSteps, settings, readKeypair, probePublicUrl, command, fundHint, rpcCall, redact, clusterName, MIN_START } from './check.mjs';
 
@@ -169,6 +170,12 @@ async function start(mode) {
   for (const key of allow) { try { new PublicKey(key); } catch { stop(`AC_ALLOW holds ${key}, which is not a Solana address`); } }
   const sendsPerHour = positive('AC_SENDS_PER_HOUR', 6), donationReadsPerMinute = positive('AC_DONATION_READS_PER_MINUTE', 60);
   const gateway = gatewaySettings(n => process.env[`AC_${n.toUpperCase().replaceAll('-', '_')}`] || undefined);
+  // AC_CREATOR_FEES=on (off by default; our relays run it, owner 30 September): the creator-fee crank
+  // moves the coin's pump.fun and PumpSwap creator fees into the vault once an epoch, this wallet paying
+  // within AC_CREATOR_FEE_BUDGET lamports an epoch (sdk/creator-fees.mjs; its AC_CREATOR_FEE_* settings).
+  const envName = n => `AC_${n.toUpperCase().replaceAll('-', '_')}`;
+  let creatorFees; try { creatorFees = creatorFeeSettings(n => process.env[envName(n)] || undefined); } catch (e) { stop(e.message.replace(/--([a-z-]+)/g, (_, n) => envName(n))); }
+  if (creatorFees && mode === 'crank') stop('AC_CREATOR_FEES runs beside a relay or gateway (npm start), not in crank mode');
   // One cranking process per operator directory: a relay or gateway and a standalone cranker on the
   // same wallet would race each other's cranks, and the standalone one is outside the spend ceiling.
   // PIDs mean nothing across containers (node is PID 1 in each), so the lock names its host and is
@@ -214,7 +221,7 @@ async function start(mode) {
     ...(process.env.AC_ATTEST === '1' ? { snapshotDir: resolve('.local/snapshots'), attest: { ours: (process.env.AC_OURS || '').split(',').map(s => s.trim()).filter(Boolean), notifier: null } } : {}),
     crank: { every: every * 1000, selfPay }, uploadDir: resolve('.local/uploads'), stateDir: resolve('.local/state'), dailyCeiling, allow, openRegister: false, perMinute,
     colony, trustedProxies: LOOPBACK, proxySecret: process.env.AC_PROXY_SECRET || null, attestedOnly: process.env.AC_ATTESTED_ONLY !== '0',
-    sendsPerHour, donationReadsPerMinute, ...(process.env.AC_OPERATOR_NAME ? { operator: process.env.AC_OPERATOR_NAME } : {}), ...gateway });
+    sendsPerHour, donationReadsPerMinute, creatorFees, ...(process.env.AC_OPERATOR_NAME ? { operator: process.env.AC_OPERATOR_NAME } : {}), ...gateway });
   console.log(`Listening at http://127.0.0.1:${port}/v2 behind ${s.publicUrl}. Preserve .local/.`);
   console.log(['', 'Next steps:', ...nextSteps({ publicUrl: s.publicUrl, port, facts: result.facts, mode }).map(l => `  - ${l}`)].join('\n'));
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { server.close(() => process.exit(0)); });

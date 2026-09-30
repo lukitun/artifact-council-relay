@@ -497,7 +497,7 @@ async function allowanceRule(c, a, cfg, action, accounts, { now, day, month, sel
 /** The newcomers' one weekly pool of the deposit room (treasury.rs `newcomer_pool`, 29 September),
  *  when too little of it is left for an upload tracker. */
 async function newcomersPool(c, cfg, now, day) {
-  const rent = Number(await (c.t.rent ? c.t.rent(UPLOAD_SIZE) : (UPLOAD_SIZE + 128) * 6960));
+  const rent = Number(await c.t.rent(UPLOAD_SIZE));
   const week = Math.floor(now / (7 * day)), same = cfg.week === week;
   const current = { ...cfg, weekDeposits: same ? cfg.weekDeposits : 0 }, spent = same ? cfg.weekNewcomers ?? 0 : 0;
   const pool = L.newcomerPool(current);
@@ -507,7 +507,7 @@ async function newcomersPool(c, cfg, now, day) {
 /** An agent's weekly share of the deposit room (treasury.rs `agent_share`, `room_share`; 28 September),
  *  when too little of it is left for the smallest deposit the action needs. */
 async function weeklyShare(c, a, cfg, now, day, governance) {
-  const rent = async n => Number(await (c.t.rent ? c.t.rent(n) : (n + 128) * 6960));
+  const rent = async n => Number(await c.t.rent(n));
   const week = Math.floor(now / (7 * day)), current = { ...cfg, weekDeposits: cfg.week === week ? cfg.weekDeposits : 0 };
   const share = governance ? L.roomShare(current) : L.agentShare(current);
   const spent = a.depositWeek === week ? a.weekDeposits : 0;

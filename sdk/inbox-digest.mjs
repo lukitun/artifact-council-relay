@@ -296,7 +296,7 @@ export const DIGEST_LIMITS = { dailyMs: 23 * 3600_000, perRecipientDay: 3, perRu
 export async function runDigest({ state, uploads, contacts, boundLabel, gateway, messenger, statePath, dryRun = false, print = console.log, log = () => {},
   nowMs = Date.now(), day = 86_400, riskWithin, relayUrl, limits = {}, sleep = ms => new Promise(r => setTimeout(r, ms)), donations = null, custodyWarning }) {
   const L = { ...DIGEST_LIMITS, ...limits }, within = riskWithin ?? day + Math.trunc(day / 24);
-  if (!dryRun && !messenger) throw Error('the digest needs a Colony messenger (AC_COLONY_KEY_FILE) or dry-run');
+  if (!dryRun && !messenger) throw Error('the digest needs a Colony messenger (the colony-api-key credential or AC_COLONY_KEY_FILE) or dry-run');
   const book = readJson(statePath, () => ({}));
   // `gifts`: per recipient, the time up to which every donation was read and reported. A complete
   // read that found nothing moves it at once (a later gift is found by the next read); one that found

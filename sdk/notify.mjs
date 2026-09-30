@@ -1,8 +1,10 @@
 // Operator pages as thecolony.cc DMs from @agentpedia to the owner's Colony account (owner, 29 September:
-// no Slack, Discord or email). The API key reaches a unit only as a systemd credential, named by
-// AC_COLONY_KEY_FILE; it is exchanged for a JWT (24h) and neither ever appears in an error or a log.
+// no Slack, Discord or email). The API key reaches a unit only as the systemd credential
+// `colony-api-key` (LoadCredential=), found in $CREDENTIALS_DIRECTORY, or outside systemd as the file
+// AC_COLONY_KEY_FILE names; it is exchanged for a JWT (24h) and neither ever appears in an error or a log.
 // The same key sends the members' inbox digest (inbox-digest.mjs) through `colonyMessenger`.
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { isIP } from 'node:net';
 import { COLONY_API, COLONY_USERNAME, breakCodes } from './colony.mjs';
 
@@ -77,16 +79,30 @@ export function colonyNotifier({ apiKey, to = ALERT_RECIPIENT, api = COLONY_API,
   return { name: `colony @${to}`, send: message => messenger.send(to, message?.text) };
 }
 
-/** The notifier the units run: null when AC_COLONY_KEY_FILE is unset; a named but unreadable key throws. */
+/** The credential name every unit loads the Colony key under (LoadCredential=colony-api-key:...). */
+export const COLONY_KEY_CREDENTIAL = 'colony-api-key';
+
+/** Where the Colony key is: AC_COLONY_KEY_FILE when set, else the `colony-api-key` credential when
+ *  systemd loaded one ($CREDENTIALS_DIRECTORY, set by systemd 247 and later), else null. The units
+ *  rely on the credential alone, never on a variable set in ExecStart=: a drop-in that repeats
+ *  ExecStart= (trial-rate.conf, port.conf) then still pages and sends the digest (30 September: a
+ *  unit that set it on ExecStart crash-looped under such a drop-in with --digest on). */
+export function colonyKeyFile(env = process.env) {
+  if (env.AC_COLONY_KEY_FILE) return env.AC_COLONY_KEY_FILE;
+  const dir = env.CREDENTIALS_DIRECTORY, file = dir && join(dir, COLONY_KEY_CREDENTIAL);
+  return file && existsSync(file) ? file : null;
+}
+
+/** The notifier the units run: null when no Colony key is configured (colonyKeyFile); a named but unreadable key throws. */
 export function notifierFromEnv(env = process.env, opts = {}) {
-  const file = env.AC_COLONY_KEY_FILE; if (!file) return null;
-  let apiKey; try { apiKey = readFileSync(file, 'utf8'); } catch { throw Error('the Colony alert key (AC_COLONY_KEY_FILE) cannot be read'); }
+  const file = colonyKeyFile(env); if (!file) return null;
+  let apiKey; try { apiKey = readFileSync(file, 'utf8'); } catch { throw Error(`the Colony alert key (${file}) cannot be read`); }
   return colonyNotifier({ apiKey, ...(env.AC_COLONY_API ? { api: env.AC_COLONY_API } : {}), ...opts });
 }
 
-/** The digest's messenger: null when AC_COLONY_KEY_FILE is unset; a named but unreadable key throws. */
+/** The digest's messenger: null when no Colony key is configured (colonyKeyFile); a named but unreadable key throws. */
 export function messengerFromEnv(env = process.env, opts = {}) {
-  const file = env.AC_COLONY_KEY_FILE; if (!file) return null;
-  let apiKey; try { apiKey = readFileSync(file, 'utf8'); } catch { throw Error('the Colony key (AC_COLONY_KEY_FILE) cannot be read'); }
+  const file = colonyKeyFile(env); if (!file) return null;
+  let apiKey; try { apiKey = readFileSync(file, 'utf8'); } catch { throw Error(`the Colony key (${file}) cannot be read`); }
   return colonyMessenger({ apiKey, ...(env.AC_COLONY_API ? { api: env.AC_COLONY_API } : {}), ...opts });
 }
