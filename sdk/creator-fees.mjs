@@ -29,6 +29,7 @@
 import { appendFileSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import * as P from './pump.mjs';
 import { clusterOfGenesis } from './cluster.mjs';
 import { page } from './alerts.mjs';
@@ -211,11 +212,16 @@ export function creatorFeeOptions({ dir, ammPath = 'auto', every = DEFAULTS.ever
  * RPC answers mainnet's genesis, sdk/cluster.mjs, so a devnet instance with a plain test mint stays
  * idle); `ammPath: 'fallback'` skips the transfer path after graduation (an incident switch; the
  * fallback also runs by itself when the transfer path fails), within `fallbacksPerDay` either way. `now` is the wall clock (ms), `sleep` its wait.
+ * A pass still running after `stall` ms (an RPC request that never answers; default as the relay's
+ * crank, at least 10 minutes) is written off as a failed pass, which counts toward the page like any
+ * other, and the schedule moves on; it sends nothing more (review, 2 October: one hung request stopped
+ * every later pass, and no page said so).
  */
 export function creatorFeeCranker(c, payer, options = {}) {
   const { dir, notifier = null, ledger = null, requirePump = null, ammPath, every, jitter, random = Math.random, lead, minLamports, feeMultiple, epochBudget,
     priorityLamports, failuresBeforePage, repeatMs, pendingMs, fallbacksPerDay, now = Date.now, sleep = ms => new Promise(r => setTimeout(r, ms)),
-    log = m => console.log(new Date().toISOString(), m), error = m => console.error(new Date().toISOString(), m) } = creatorFeeOptions(options);
+    log = m => console.log(new Date().toISOString(), m), error = m => console.error(new Date().toISOString(), m), stall = Math.max(10 * every, 600_000) } = creatorFeeOptions(options);
+  if (!Number.isSafeInteger(stall) || stall < 1) throw Error('creator-fee crank: stall must be a positive integer of milliseconds');
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const t = c.t, vault = c.vault, program = c.program.toBase58(), relay = payer.publicKey.toBase58();
   const statePath = join(dir, 'state.json'), logPath = join(dir, 'signatures.jsonl');
@@ -236,7 +242,9 @@ export function creatorFeeCranker(c, payer, options = {}) {
     try { appendFileSync(logPath, `${json({ at: new Date(now()).toISOString(), program, relay, ...entry })}\n`, { mode: 0o600 }); }
     catch (e) { cry(`creator fees: the signature log cannot be written: ${e.message}`); }
   };
-  const status = { every, lead, minLamports, feeMultiple, epochBudget, priorityLamports, fallbacksPerDay, passes: 0, running: false, last: null };
+  const status = { every, lead, minLamports, feeMultiple, epochBudget, priorityLamports, fallbacksPerDay, stall, passes: 0, running: false, last: null };
+  // Each pass runs in its own context: { off } once it is written off as stalled.
+  const fence = new AsyncLocalStorage();
   // A pump transaction loads pump, PumpSwap and the token programs (live devnet: 56k to 71k CU).
   const TX = { computeUnitLimit: 200_000, loadedAccountsDataSizeLimit: 8 * 1024 * 1024, priorityFeeLamports: BigInt(priorityLamports) };
   const worstOf = extra => TX_FEE + priorityLamports + Number(extra);
@@ -248,7 +256,9 @@ export function creatorFeeCranker(c, payer, options = {}) {
   const stagger = window => (window >= 2 ? keyDraw % Math.floor(window / 2) : 0);
 
   const spentIn = n => (state.spent.epoch === n ? state.spent.lamports : 0);
-  const charge = (n, lamports) => { state.spent = { epoch: n, lamports: spentIn(n) + lamports }; };
+  // A late charge for an epoch already passed (a pass written off as stalled whose send came back)
+  // never replaces the current epoch's record; the day's ledger still counts it.
+  const charge = (n, lamports) => { if (state.spent.epoch > n) return; state.spent = { epoch: n, lamports: spentIn(n) + lamports }; };
   const today = () => new Date(now()).toISOString().slice(0, 10);
   const fallbacksToday = () => (state.fallbacks?.day === today() ? state.fallbacks.sent : 0);
   /** The payer's cost and the vault's gain in one transaction: from the transaction itself on an RPC
@@ -273,8 +283,12 @@ export function creatorFeeCranker(c, payer, options = {}) {
   /** Sends one transaction within the epoch's bound and the day's ledger and logs its signature,
    *  whatever becomes of it. Throws the transport's error marked with its `outcome` and `programError`. */
   const send = async (n, kind, what, ixs, worst, expected) => {
+    // A pass written off as stalled sends nothing more: the passes after it decide.
+    if (fence.getStore()?.off) throw Object.assign(Error('the pass was written off as stalled'), { outcome: 'unsent', kind });
     if (spentIn(n) + worst > epochBudget) throw Object.assign(Error(`the epoch's cost bound is spent: ${spentIn(n)} of ${epochBudget} lamports used, the ${kind} may cost ${worst}`), { outcome: 'bounded', kind });
     const vaultBefore = lamportsOf(await t.getAccount(vault));
+    // Asked again: the read above can hang past the write-off, and the passes after it decide.
+    if (fence.getStore()?.off) throw Object.assign(Error('the pass was written off as stalled'), { outcome: 'unsent', kind });
     const ticket = ledger ? ledger.reserve(worst, { exposure: worst }) : null;
     let signature = null, outcome = 'landed', err = null, cost = 0, gained = null;
     try { signature = await t.send(ixs, payer, [], TX); }
@@ -409,40 +423,46 @@ export function creatorFeeCranker(c, payer, options = {}) {
     // chain and has nothing left to do: it ends the run. One that waited for its window or for a
     // pending send read the chain without error, so it ends a run of failed reads: only the run's
     // failed window attempts stay counted (a crank failing in every window still pages).
+    // A pass written off as stalled changes no state when it wakes: the pass after it decides.
+    const token = { off: false }, keep = patch => { if (!token.off) Object.assign(state, patch); };
+    let timer;
     const skip = (why, done = false) => {
-      const keep = done ? 0 : Math.min(state.failures, state.windowFailures ?? 0);
-      if (state.failures > keep) { Object.assign(state, { failures: keep }, keep ? {} : { lastError: null }); cleared = true; }
+      const kept = done ? 0 : Math.min(state.failures, state.windowFailures ?? 0);
+      if (state.failures > kept && !token.off) { Object.assign(state, { failures: kept }, kept ? {} : { lastError: null }); cleared = true; }
       return (result = { skipped: why });
     };
+    const stalled = new Promise((_, reject) => { timer = setTimeout(() => { token.off = true; reject(Error(`pass stalled for ${stall} ms`)); }, stall); timer.unref?.(); });
     try {
-      const cfg = await c.config();
-      // Config read without error: with no mint there is nothing to do, and the pass succeeded.
-      if (cfg.mint === NONE) { Object.assign(state, { failures: 0, lastError: null }); return (result = { idle: 'no mint is set yet (SetMint)' }); }
-      const mint = mintNow = new PublicKey(cfg.mint);
-      state.mint = mint.toBase58();
-      const n = cfg.epoch, window = Math.min(lead, cfg.g.EPOCH_SECS), opens = cfg.epochStart + cfg.g.EPOCH_SECS - window + stagger(window);
-      if (state.epoch === n) return skip(`epoch ${n} is done`, true);
-      if (Math.floor(await t.now()) < opens) return skip(`epoch ${n}: the collect waits until ${new Date(opens * 1000).toISOString()}`);
-      inWindow = true;
-      if (state.pending && !(await settlePending())) return skip(`waiting to learn whether ${state.pending.signature} landed`);
-      pumpRequired ??= clusterOfGenesis(await t.genesis()) === 'mainnet';
-      const check = await creatorCheck(t, { mint, vault });
-      if (!check.pump && !pumpRequired) {
-        Object.assign(state, { epoch: n, mismatch: null, failures: 0, lastError: null });
-        return (result = { idle: `${mint.toBase58()} is not a pump.fun coin (it has no bonding curve)` });
-      }
-      const problems = check.pump ? check.problems : [`the configured mint ${mint.toBase58()} has no pump.fun bonding curve`];
-      if (problems.length) {
-        // Refused: nothing is sent while the creator is not the vault; the page says why.
-        Object.assign(state, { epoch: n, mismatch: problems, failures: 0, lastError: null });
-        cry(`creator fees: epoch ${n}: refused, the creator is not the vault: ${problems.join('; ')}`);
-        return (result = { refused: problems });
-      }
-      state.mismatch = null;
-      const r = await collect(n, check);
-      Object.assign(state, { epoch: n, failures: 0, lastError: null });
-      if (r.done.length) Object.assign(state, { migrated: null, lastCollect: { epoch: n, at, steps: r.done } });
-      return (result = { ...(r.done.length ? { collected: r.done } : { dust: sol(r.seen) }), ...(r.held ? { held: r.held } : {}) });
+      return await Promise.race([fence.run(token, async () => {
+        const cfg = await c.config();
+        // Config read without error: with no mint there is nothing to do, and the pass succeeded.
+        if (cfg.mint === NONE) { keep({ failures: 0, lastError: null }); return (result = { idle: 'no mint is set yet (SetMint)' }); }
+        const mint = mintNow = new PublicKey(cfg.mint);
+        keep({ mint: mint.toBase58() });
+        const n = cfg.epoch, window = Math.min(lead, cfg.g.EPOCH_SECS), opens = cfg.epochStart + cfg.g.EPOCH_SECS - window + stagger(window);
+        if (state.epoch === n) return skip(`epoch ${n} is done`, true);
+        if (Math.floor(await t.now()) < opens) return skip(`epoch ${n}: the collect waits until ${new Date(opens * 1000).toISOString()}`);
+        inWindow = true;
+        if (state.pending && !(await settlePending())) return skip(`waiting to learn whether ${state.pending.signature} landed`);
+        pumpRequired ??= clusterOfGenesis(await t.genesis()) === 'mainnet';
+        const check = await creatorCheck(t, { mint, vault });
+        if (!check.pump && !pumpRequired) {
+          keep({ epoch: n, mismatch: null, failures: 0, lastError: null });
+          return (result = { idle: `${mint.toBase58()} is not a pump.fun coin (it has no bonding curve)` });
+        }
+        const problems = check.pump ? check.problems : [`the configured mint ${mint.toBase58()} has no pump.fun bonding curve`];
+        if (problems.length) {
+          // Refused: nothing is sent while the creator is not the vault; the page says why.
+          keep({ epoch: n, mismatch: problems, failures: 0, lastError: null });
+          cry(`creator fees: epoch ${n}: refused, the creator is not the vault: ${problems.join('; ')}`);
+          return (result = { refused: problems });
+        }
+        keep({ mismatch: null });
+        const r = await collect(n, check);
+        keep({ epoch: n, failures: 0, lastError: null });
+        if (r.done.length) keep({ migrated: null, lastCollect: { epoch: n, at, steps: r.done } });
+        return (result = { ...(r.done.length ? { collected: r.done } : { dust: sol(r.seen) }), ...(r.held ? { held: r.held } : {}) });
+      }), stalled]);
     } catch (e) {
       if (e.mismatch) { Object.assign(state, { mismatch: e.mismatch, failures: 0 }); return (result = { refused: e.mismatch }); }
       // Count the run's failed window attempts apart from its read errors (a new run starts from this pass).
@@ -453,6 +473,7 @@ export function creatorFeeCranker(c, payer, options = {}) {
       cry(`creator fees: pass failed (${state.failures} in a row): ${state.lastError}`);
       return (result = { failed: state.lastError });
     } finally {
+      clearTimeout(timer);
       status.passes++; status.running = false; status.last = { at, ...(result ?? {}) };
       save();
       // Pages follow what a pass saw; one that only waited leaves them as they are, unless it ended a

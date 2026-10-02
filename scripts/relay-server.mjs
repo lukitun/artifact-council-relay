@@ -2038,6 +2038,8 @@ export async function startRelay({ rpc, program, payer, port = 8899, host = '127
     const { every, jitter, stall } = crankTiming({ every: _e, jitter: _j, stall: _s });
     const quiet = f => m => { try { f(m); } catch {} }, say = quiet(log), cry = quiet(error);
     const status = { every, jitter, stall, passes: 0, failures: 0, stepFailures: 0, running: false, last: null };
+    // The shared steps are taken in turn with the other seats (cranks.mjs myTurn): this relay's memory of them.
+    const turns = { seen: new Map() };
     let timer = null, stopped = false;
     const cost = async signature => {
       for (let i = 0; signature && i < 4; i++) { const tx = await t.transaction(signature).catch(() => null); if (typeof tx?.payerDelta === 'number') return Math.max(0, -tx.payerDelta); await new Promise(r => setTimeout(r, 300)); }
@@ -2062,7 +2064,7 @@ export async function startRelay({ rpc, program, payer, port = 8899, host = '127
       let timer;
       const stalled = new Promise((_, reject) => { timer = setTimeout(() => reject(Error(`pass stalled for ${stall} ms`)), stall); timer.unref?.(); });
       try {
-        const done = await Promise.race([crankOnce(metered(), payer, { ...options, log: say, failed }), stalled]);
+        const done = await Promise.race([crankOnce(metered(), payer, { ...options, turns, log: say, failed }), stalled]);
         status.stepFailures += failed.length; status.last = { at, ok: true, steps: done.length, failed: failed.length };
         // Steps that fail are logged one by one; a pass where some failed is reported too.
         if (failed.length) cry(`crank pass: ${failed.length} step(s) failed: ${failed.join(', ')}`);

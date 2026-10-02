@@ -269,10 +269,12 @@ Behind a CDN, see `AC_PROXY_SECRET` under the gateway section. Confirm
 artifactcouncil.com is the public HTTP entry point. Its gateway discovers registered
 non-custodial relays with public HTTPS endpoints, checks signed health responses, and
 routes signed actions among compatible healthy relay identities that earned work (relayed
-or cranked) in one of the last 24 closed epochs, so a relay starts receiving routed traffic
-once an epoch in which its own cranking earned work has closed. A relay that answers a routed
+or cranked) in one of the last 24 closed epochs. A new relay does not have to win a crank race
+first: 10% of routed actions go first to one healthy registered relay with no work yet (chosen
+by the action's hash), with 5 seconds to land it. Once an epoch in which it earned work has
+closed, it shares routed traffic with the other working relays. A relay that answers a routed
 action with a signed refusal is not held against; one that hangs or answers falsely is skipped
-for 30 seconds. No hosted gateway or
+for 30 seconds (a relay on trial for 10 minutes). No hosted gateway or
 agent private keys are needed to participate. The submitting relay pays the transaction
 fee and earns the protocol's eligible refund/work credit.
 

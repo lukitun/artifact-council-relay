@@ -30,7 +30,7 @@
     },
     {
       "file": "README.md",
-      "sha256": "c104559dae7fc85fef2f5b924e9d88ca3ba75ff1a2dc4f2231d93606571dd687"
+      "sha256": "b1040ffc34a2033f1b52af66b8000b043e63e37208efb90832264c926c5dabed"
     },
     {
       "file": "LICENSE",
@@ -58,7 +58,7 @@
     },
     {
       "file": "sdk/index.mjs",
-      "sha256": "af494b210aaea42f0485c67e7e6a763e65e4924651d4a4f85e6da23f6a411ab8"
+      "sha256": "382729105c3cd5f5dcb1724861236849ea8ea4cec60253a762957c242d5550d7"
     },
     {
       "file": "sdk/layout.mjs",
@@ -74,11 +74,11 @@
     },
     {
       "file": "sdk/cranks.mjs",
-      "sha256": "2511f16a197b7315fc52ac6059c89edbfbc5c252f6c6b49eb130b8d4789bec53"
+      "sha256": "cb6b9e67c279bbffe8e25eeb7d30079ccf42cd714629cb78132a646774e887b4"
     },
     {
       "file": "sdk/relay-pool.mjs",
-      "sha256": "8f82478ebc04f6f8376a6097fdd19024b47489752a262c8238287b6c7d353fb5"
+      "sha256": "ffc1ea1461352db9f7be1ff79dfafab6d5290574aaf92975eec2027978a8f988"
     },
     {
       "file": "sdk/colony.mjs",
@@ -122,7 +122,7 @@
     },
     {
       "file": "sdk/snapshots.mjs",
-      "sha256": "1f69a136660c624bc73bdbc41488529ca6f1e54cb201751135121a7592d02755"
+      "sha256": "7f8ec957fafda62502df105ab9459df0f109b60d2348caa249f3c0977420197f"
     },
     {
       "file": "sdk/request-checks.mjs",
@@ -138,7 +138,7 @@
     },
     {
       "file": "sdk/notify.mjs",
-      "sha256": "799e02ddfe5a5ba1bb1c32f0054d3000f6ea5539a4f7b77eda5591e7e4703c84"
+      "sha256": "ccd4db7e3da4ace466ad17b68cf4a5e83a003b2c194a973e5b88341060fb3560"
     },
     {
       "file": "sdk/inbox.mjs",
@@ -150,7 +150,7 @@
     },
     {
       "file": "sdk/snapshot-seat.mjs",
-      "sha256": "3602d3ba714e8aeeb5bd6652c3d30537de417e432f9cbc17933d47268030a674"
+      "sha256": "478a9e7e68fe94ff5c57f62dae437e703a4ab6047b3e368e710b688aa1a95890"
     },
     {
       "file": "sdk/snapshot-source.mjs",
@@ -174,7 +174,7 @@
     },
     {
       "file": "sdk/creator-fees.mjs",
-      "sha256": "df83d8be2f0096e9ade1dbf5029544612ef33d2c06af680e1be520a46afa9033"
+      "sha256": "965760908d27d01fa37d35624473e81c0dc2150dd87a6740e4186309075b7058"
     },
     {
       "file": "sdk/pump.mjs",
@@ -182,7 +182,7 @@
     },
     {
       "file": "scripts/relay-server.mjs",
-      "sha256": "14a70f71946fd505206fdc37f44e1abe9fc200609daa0cf1539eb57fcdfed335"
+      "sha256": "0611e5720c556c3440e5377eed7761d460441cf24be70503bae5a7fe89058eb5"
     },
     {
       "file": "scripts/http-agent.mjs",

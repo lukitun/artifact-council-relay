@@ -11,6 +11,8 @@ const ZERO='11111111111111111111111111111111';
 export const MAX_HOPS=1;
 /** Milliseconds a peer gets to answer a routed submission (health checks get 3 s). */
 export const RELAY_TIMEOUT=20000;
+/** A trial relay (no recent work) gets this long to answer, and is benched this long after a failure. */
+export const TRIAL_TIMEOUT=5000, TRIAL_BENCH=600000;
 /** Milliseconds of an envelope's life routing leaves for this relay's own submission. */
 export const LOCAL_RESERVE=15000;
 export function publicAddress(address) {
@@ -64,9 +66,13 @@ export const hostedRegistration=a=>(a.type==='register'&&a.hosted)||(a.type==='s
  * `concurrency` outbound requests are open at once (past that the envelope is served here), each
  * bounded by `timeout`, all of them by `deadline` per envelope and by the envelope's expiry less
  * LOCAL_RESERVE. Forwarded envelopes carry `hops`; the receiving relay serves them locally
- * (MAX_HOPS), and only peers advertising relay-hops-v1 are routed to.
+ * (MAX_HOPS), and only peers advertising relay-hops-v1 are routed to. A `trial` share of envelopes
+ * (chosen by the message hash) first tries one relay with no recent work, so a new relay can earn
+ * the work that qualifies it (owner, 1 October): it gets TRIAL_TIMEOUT, and a failure benches it for
+ * TRIAL_BENCH before the envelope goes on to the ranked peers.
  */
-export function relayPool(c,payer,{send=publicRelayRequest,now=Date.now,timeout=RELAY_TIMEOUT,concurrency=16,recent=24,minUnits=1,fanout=3,deadline=45000}={}) {
+export function relayPool(c,payer,{send=publicRelayRequest,now=Date.now,timeout=RELAY_TIMEOUT,concurrency=16,recent=24,minUnits=1,fanout=3,deadline=45000,trial=0.1}={}) {
+  if(typeof trial!=='number'||!(trial>=0&&trial<=1))throw Error('relay pool trial must be a fraction from 0 to 1');
   for(const [k,v] of Object.entries({timeout,concurrency,recent,minUnits,fanout,deadline}))if(!Number.isSafeInteger(v)||v<(k==='recent'?0:1))throw Error(`relay pool ${k} must be a ${k==='recent'?'non-negative':'positive'} integer`);
   let cache=null, expires=0, open=0;
   const health=new Map(), self=payer.publicKey.toBase58();
@@ -110,7 +116,7 @@ export function relayPool(c,payer,{send=publicRelayRequest,now=Date.now,timeout=
     throw Object.assign(Error('agent nonce advanced with a different action; inspect chain state'),{status:409});
   }
   return {
-    async status(){return {policy:`hash-ranked distribution across registered relays with ${minUnits}+ work units in one of the last ${recent} closed epochs; the next peer, then local, on any failure`,relays:(await candidates()).map(p=>({...p,healthy:health.get(p.key)?.ok??null})),fallback:self,outbound:{open,concurrency}};},
+    async status(){return {policy:`hash-ranked distribution across registered relays with ${minUnits}+ work units in one of the last ${recent} closed epochs, and ${Math.round(trial*100)}% of envelopes first to one relay without; the next peer, then local, on any failure`,relays:(await candidates()).map(p=>({...p,healthy:health.get(p.key)?.ok??null})),fallback:self,outbound:{open,concurrency}};},
     /** `route` false: recover from the chain or serve locally, never forward (a forwarded envelope). */
     async submit(body,local,{route=true}={}){
       const message=Buffer.from(body.message,'base64'),env=decodeEnvelope(message);
@@ -122,13 +128,19 @@ export function relayPool(c,payer,{send=publicRelayRequest,now=Date.now,timeout=
       const score=p=>createHash('sha256').update(message).update(p.key).digest('hex');
       // An agent's own choice of relay needs no work record; the default ranking does.
       const peers=all.filter(p=>preferred?p.key===env.preferred:p.worked).sort((a,b)=>score(a).localeCompare(score(b))).slice(0,fanout);
+      const benched=p=>{const h=health.get(p.key);return !!h&&!h.ok&&h.until>now();};
+      const trialled=!preferred&&createHash('sha256').update('trial').update(message).digest().readUInt32BE(0)<trial*2**32;
+      const newcomer=trialled?all.filter(p=>!p.worked&&!benched(p)).sort((a,b)=>score(a).localeCompare(score(b)))[0]:null;
+      const bench=(peer,ms)=>health.set(peer.key,{ok:false,until:now()+ms});
       // Routing never eats into the time this relay needs to land the envelope itself (a preferred
       // envelope has no local attempt).
       const until=now()+Math.min(deadline,(env.expiry-Math.floor(await c.t.now()))*1000-(preferred?0:LOCAL_RESERVE)), packet={...body,hops:(Number.isSafeInteger(body.hops)&&body.hops>0?body.hops:0)+1};
-      for(const peer of peers){
-        if(until<=now()||!await healthy(peer))continue;
+      for(const peer of newcomer?[newcomer,...peers]:peers){
+        const trying=peer===newcomer;
+        if(until<=now())continue;
+        if(!await healthy(peer)){if(trying)bench(peer,TRIAL_BENCH);continue;}
         const left=until-now();if(left<=0)break;
-        const pending=call(peer,'/v2/relay',packet,Math.min(timeout,left));
+        const pending=call(peer,'/v2/relay',packet,Math.min(trying?TRIAL_TIMEOUT:timeout,left));
         if(!pending){if(preferred)throw Object.assign(Error('relay pool is at its outbound request limit; retry shortly'),{status:503});break;}
         try{
           const {data,receipt}=authenticated(await pending,peer.key);
@@ -138,7 +150,7 @@ export function relayPool(c,payer,{send=publicRelayRequest,now=Date.now,timeout=
           if(!await match(tx,message,peer.key))throw Error('relay response does not match a confirmed transaction');
           return {...data,relay:peer.key,relayUrl:peer.url,relayReceipt:receipt};
         }catch(error){
-          if(!error.refused)health.set(peer.key,{ok:false,until:now()+30000});
+          if(!error.refused||trying)bench(peer,trying?TRIAL_BENCH:30000);
           const recovered=await recover(message,env);if(recovered)return recovered;
           // Only the named relay may submit a preferred envelope: nothing to fall through to.
           if(preferred)throw Object.assign(Error(`relay submission uncertain; retry the same signed envelope: ${error.message}`),{status:503});

@@ -33,6 +33,7 @@ import { TAG, SNAPSHOT, times, quorum, verdictOf, vetoedOf, commitHash, decodeEp
 import { parseSnapshot, fixSnapshot, commitSnapshot, revealSnapshot, vetoSnapshot, activateSeat, distributeSnapshot, newSalt, snapshotBody } from './snapshots.mjs';
 import { captureSource, snapshotFromSource, sourceBytes, roundOf } from './snapshot-source.mjs';
 import { LIMITS } from './alerts.mjs';
+import { myTurn } from './cranks.mjs';
 
 /** Escalating veto priority fees in lamports, each attempt given `VETO_WAIT` seconds to land. */
 export const VETO_FEES = [100_000, 1_000_000, 10_000_000, 50_000_000];
@@ -41,6 +42,16 @@ export const VETO_WAIT = 12;
 export const EVENT_SECS = 3600;
 /** Pass cadence: fast while a distribution is in flight, slow otherwise. */
 export const FAST_MS = 5_000, SLOW_MS = 30_000, RETRY_SECS = 30;
+/** The Fix's line between the seats (review, 2 October): it needs the slot hash of `SNAP_SLOTS` after
+ *  the close, which the slot hashes sysvar keeps for 512 slots (about 205 s) after that slot, and must
+ *  land inside the fix window (5 minutes from the close), so the usual TURN_SECS per place (120 s) let no
+ *  seat past the second in line ever fix a round. Here each place waits FIX_TURN_SECS more (several fast
+ *  passes) and none more than FIX_TURN_CAP, so every seat sends inside both, with room for its
+ *  transaction to land; a build with shorter days scales both to its fix window (`fixTurn`). The line
+ *  keeps the same order on every relay (an outside one runs this code too, with its own list of ours),
+ *  so it is not reordered to put our seats first: two relays would then each think it goes first. */
+export const FIX_TURN_SECS = 30, FIX_TURN_CAP = 120;
+export const fixTurn = (day = 86_400) => { const w = times(day).fixWindow; return { wait: Math.min(FIX_TURN_SECS, w / 10), cap: Math.min(FIX_TURN_CAP, w * 0.4) }; };
 /** Published rounds and private seat records kept on disk. */
 export const KEEP_ROUNDS = 5 * 48;
 
@@ -238,7 +249,7 @@ export function admits(book, now, day) {
  * alerted, never thrown: a seat's pass must not stop the relay's crank.
  */
 export async function seatPass(c, relay, { store, ours = [], known = [], compute = captureSource, vetoFees = VETO_FEES, vetoWait = VETO_WAIT, vetoTransport, pay = true,
-  float = LIMITS.floatLamports, fetch, archive = [], log = () => {} } = {}) {
+  float = LIMITS.floatLamports, fetch, archive = [], log = () => {}, turns = null } = {}) {
   if (!store) throw Error('a seat needs its snapshot store');
   const me = b58(relay), done = [], alerts = [], day = c.day ?? 86_400, T = times(day);
   const alert = (rule, key, message) => alerts.push({ rule, key: `${rule}:${key}`, message });
@@ -300,7 +311,10 @@ export async function seatPass(c, relay, { store, ours = [], known = [], compute
   const save = patch => { r = { ...r, ...patch }; store.save(n, r); };
   // 1. Fix.
   if (!book.commitEnd) {
-    if (now < book.deadline && await newestHashed(c) >= e.closeSlot + SNAPSHOT.SNAP_SLOTS && await step(`fix epoch ${n}`, () => fixSnapshot(c, relay), async () => !!(await c.book()).commitEnd)) book = await c.book();
+    // Taken in turn with the other seats (cranks.mjs myTurn), on the Fix's short line: only one of them
+    // fixes a round, and any of them in time.
+    const seats = (await c.all(TAG.ATTESTOR)).filter(a => a.state === 'active').map(a => a.relay), fix = fixTurn(day);
+    if (now < book.deadline && await newestHashed(c) >= e.closeSlot + SNAPSHOT.SNAP_SLOTS && (!turns || myTurn(`fix epoch ${n}`, me, seats, now, turns.seen, fix.wait, fix.cap)) && await step(`fix epoch ${n}`, () => fixSnapshot(c, relay), async () => !!(await c.book()).commitEnd)) book = await c.book();
     if (!book.commitEnd) book = await c.book();
     if (!book.commitEnd) return { done, alerts };
   }
@@ -441,12 +455,12 @@ export async function veto(c, relay, n, hash, { fees = VETO_FEES, wait = VETO_WA
  * on a pass; a pass that fails (an RPC error) pages `seat-pass-failed` with the last good pass's alerts
  * and `resolve: false`, so a condition it never re-checked is not reported cleared.
  */
-export async function runSeat(c, relay, { stopped = () => false, sleep = ms => new Promise(r => setTimeout(r, ms)), pager = async () => {}, error = () => {}, ...options } = {}) {
+export async function runSeat(c, relay, { stopped = () => false, sleep = ms => new Promise(r => setTimeout(r, ms)), pager = async () => {}, error = () => {}, turns = { seen: new Map() }, ...options } = {}) {
   let last = [];
   for (;;) {
     let fast = false, alerts = [], resolve = true;
     try {
-      ({ alerts } = await seatPass(c, relay, options));
+      ({ alerts } = await seatPass(c, relay, { ...options, turns }));
       last = alerts;
       fast = (await c.config()).distributing !== null;
     } catch (e) {

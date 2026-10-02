@@ -17,7 +17,7 @@ export const TOKEN = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
 // AC_CLUSTER); the operator package's network is NETWORK below.
 export { DEVNET_GENESIS, MAINNET_GENESIS };
 /** The live devnet program: the operator package's one default for AC_PROGRAM (release 29 September). */
-export const DEVNET_PROGRAM = 'GhnzdPL4hguV8mnQXaRrS8pnYKgBaS4zA6tE9GMFUyme';
+export const DEVNET_PROGRAM = 'J9k1DKoUZDpJYNNg5rP5W3eSF1MoF9TTYhHCJqmG5rt1';
 /** Solana mainnet-beta, for the mainnet package (`npm run build:relay:mainnet`, operator guide "A
  *  mainnet package"): that build packages this same file with the NETWORK line below replaced by
  *  `export const NETWORK = MAINNET;`, and nothing else changed. MAINNET_PROGRAM is a placeholder

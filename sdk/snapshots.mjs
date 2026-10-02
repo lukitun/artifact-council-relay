@@ -218,9 +218,11 @@ export async function currentRound(c) {
 /**
  * Pays the armed result's next leaves in index order, `batch` per transaction, until `maxPayments`
  * leaves or the end. The dataset comes from `source` and must match the armed candidate byte for
- * byte. A batch another relay landed first is skipped, not retried.
+ * byte. A batch another relay landed first is skipped, not retried. `turn(cursor)`, when given, is asked
+ * before every batch and stops the payment when it says no (cranks.mjs payTurn); `landed(cursor)` hears
+ * the cursor each batch this payer landed left.
  */
-export async function distributeSnapshot(c, payer, { source = c.snapshotSource, maxPayments = 400, batch, selfPaid } = {}) {
+export async function distributeSnapshot(c, payer, { source = c.snapshotSource, maxPayments = 400, batch, selfPaid, turn = null, landed = async () => {} } = {}) {
   const round = await currentRound(c); if (!round) return { paid: 0 };
   const { cfg, book } = round, epoch = cfg.distributing;
   if (!book?.armed) return { paid: 0, waiting: 'snapshot quorum' };
@@ -237,8 +239,9 @@ export async function distributeSnapshot(c, payer, { source = c.snapshotSource, 
   while (paid < maxPayments) {
     const e = await c.read(c.epochAddress(epoch), decodeEpoch);
     if ((await c.config()).distributing !== epoch || e.leavesPaid >= s.count) break;
+    if (turn && !await turn(e.leavesPaid)) break;
     const n = Math.min(k, s.count - e.leavesPaid, maxPayments - paid);
-    try { await paySnapshot(c, s, e.leavesPaid, n, payer, { selfPaid }); paid += n; }
+    try { await paySnapshot(c, s, e.leavesPaid, n, payer, { selfPaid }); paid += n; await landed(e.leavesPaid + n); }
     catch (err) {
       // Another relay paid this batch first: carry on from the cursor it left.
       const now = await c.maybe(c.epochAddress(epoch), decodeEpoch);

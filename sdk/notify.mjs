@@ -71,12 +71,31 @@ export function colonyMessenger({ apiKey, api = COLONY_API, fetch = globalThis.f
   };
 }
 
-/** Sends `message.text` as a DM to `to`. `api` is https, or plain http only to this machine (tests). */
-export function colonyNotifier({ apiKey, to = ALERT_RECIPIENT, api = COLONY_API, fetch = globalThis.fetch, timeoutMs = 10_000, now = Date.now }) {
+/** A page with every Solana address and transaction signature (a base58 run of 32 or more characters)
+ *  replaced by `<address>`. Colony DMs are not ours and may not be private (owner, 1 October): no page
+ *  names a program, vault, mint, wallet or transaction. The full text stays in the sender's journal. */
+export const redactAddresses = text => String(text ?? '').replace(/[1-9A-HJ-NP-Za-km-z]{32,}/g, '<address>');
+
+/** A seat label (AC_SEAT_LABEL, "seat A"): letters, digits, spaces, `.`, `_` and `-`, at most 24
+ *  characters, so it can never be an address (32 or more base58 characters). */
+const LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,23}$/;
+/** A redacted page named by its seat (review, 2 October: since addresses are redacted, "relay <address>"
+ *  no longer said which seat sent it): the leading source and its address become `label` and the
+ *  source ("seat A relay: ...", "seat B snapshot seat: ..."), any other page starts "label: ". */
+export function labelled(text, label) {
+  if (!label) return text;
+  const head = /^([a-z][a-z -]*?) <address>:/;
+  return head.test(text) ? text.replace(head, `${label} $1:`) : `${label}: ${text}`;
+}
+
+/** Sends `message.text`, addresses redacted, as a DM to `to`, named by the seat `label` when one is set.
+ *  `api` is https, or plain http only to this machine (tests). */
+export function colonyNotifier({ apiKey, to = ALERT_RECIPIENT, api = COLONY_API, fetch = globalThis.fetch, timeoutMs = 10_000, now = Date.now, label = null }) {
   if (typeof apiKey !== 'string' || !apiKey.trim()) throw Error('the Colony alert key is empty');
   if (!USERNAME.test(to)) throw Error('invalid Colony alert recipient');
+  if (label !== null && !LABEL.test(label)) throw Error('the seat label (AC_SEAT_LABEL) is at most 24 letters, digits, spaces, dots, dashes or underscores');
   const messenger = colonyMessenger({ apiKey, api, fetch, timeoutMs, now });
-  return { name: `colony @${to}`, send: message => messenger.send(to, message?.text) };
+  return { name: `colony @${to}`, send: message => messenger.send(to, labelled(redactAddresses(message?.text), label)) };
 }
 
 /** The credential name every unit loads the Colony key under (LoadCredential=colony-api-key:...). */
@@ -93,11 +112,12 @@ export function colonyKeyFile(env = process.env) {
   return file && existsSync(file) ? file : null;
 }
 
-/** The notifier the units run: null when no Colony key is configured (colonyKeyFile); a named but unreadable key throws. */
+/** The notifier the units run: null when no Colony key is configured (colonyKeyFile); a named but
+ *  unreadable key throws. Its pages are named by AC_SEAT_LABEL when the unit sets it ("seat A"). */
 export function notifierFromEnv(env = process.env, opts = {}) {
   const file = colonyKeyFile(env); if (!file) return null;
   let apiKey; try { apiKey = readFileSync(file, 'utf8'); } catch { throw Error(`the Colony alert key (${file}) cannot be read`); }
-  return colonyNotifier({ apiKey, ...(env.AC_COLONY_API ? { api: env.AC_COLONY_API } : {}), ...opts });
+  return colonyNotifier({ apiKey, ...(env.AC_COLONY_API ? { api: env.AC_COLONY_API } : {}), ...(env.AC_SEAT_LABEL ? { label: env.AC_SEAT_LABEL } : {}), ...opts });
 }
 
 /** The digest's messenger: null when no Colony key is configured (colonyKeyFile); a named but unreadable key throws. */
